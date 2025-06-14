@@ -11,7 +11,7 @@ use tokio::time;
 use crate::config::Config;
 use crate::ping::{PingEngine, PingEvent};
 use crate::stats::PingStats;
-use crate::tui::TuiApp;
+use crate::tui::{TuiApp, AnimationType};
 
 pub struct App {
     config: Config,
@@ -22,7 +22,7 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new(config: Config) -> Result<Self> {
+    pub async fn new(config: Config, animation_type: Option<AnimationType>) -> Result<Self> {
         // Create event channel
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
@@ -36,7 +36,7 @@ impl App {
         let host_info = ping_engine.get_host_info();
 
         // Initialize TUI
-        let mut tui = TuiApp::new().await?;
+        let mut tui = TuiApp::new(animation_type).await?;
         tui.set_host_info(host_info.clone());
 
         // Initialize stats

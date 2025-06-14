@@ -54,11 +54,8 @@ pub struct TuiState {
     pub bounce_dy: f64,
 }
 
-impl Default for TuiState {
-    fn default() -> Self {
-        // Initialize bouncing logo position and velocity
-        let animation_type = AnimationType::random();
-        
+impl TuiState {
+    pub fn with_animation(animation_type: AnimationType) -> Self {
         // Debug: Log which animation was selected
         eprintln!("🎨 Selected animation: {:?}", animation_type);
         
@@ -83,6 +80,14 @@ impl Default for TuiState {
     }
 }
 
+impl Default for TuiState {
+    fn default() -> Self {
+        // Initialize with random animation
+        let animation_type = AnimationType::random();
+        Self::with_animation(animation_type)
+    }
+}
+
 pub struct TuiApp {
     terminal: Terminal<CrosstermBackend<io::Stdout>>,
     state: TuiState,
@@ -90,7 +95,7 @@ pub struct TuiApp {
 }
 
 impl TuiApp {
-    pub async fn new() -> anyhow::Result<Self> {
+    pub async fn new(animation_type: Option<AnimationType>) -> anyhow::Result<Self> {
         // Setup terminal
         enable_raw_mode()?;
         let mut stdout = io::stdout();
@@ -98,9 +103,15 @@ impl TuiApp {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
 
+        let state = if let Some(anim_type) = animation_type {
+            TuiState::with_animation(anim_type)
+        } else {
+            TuiState::default()
+        };
+
         Ok(Self {
             terminal,
-            state: TuiState::default(),
+            state,
             host_info: Vec::new(),
         })
     }
