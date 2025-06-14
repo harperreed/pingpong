@@ -354,8 +354,8 @@ fn render_animation_window(f: &mut Frame, area: Rect, frame: usize, avg_rtt: f64
             (art, format!(" Digital Earth - RTT: {:.1}ms ", avg_rtt))
         },
         AnimationType::BouncingLogo => {
-            let art = generate_bouncing_logo_animation(bounce_pos, area.width as usize, area.height as usize);
-            (art, format!(" Retro Bounce - RTT: {:.1}ms ", avg_rtt))
+            let art = generate_bouncing_rtt_animation(bounce_pos, area.width as usize, area.height as usize, avg_rtt);
+            (art, format!(" Bouncing RTT - {:.1}ms ", avg_rtt))
         },
     };
     
@@ -555,7 +555,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
     result.join("\n")
 }
 
-fn generate_bouncing_logo_animation(bounce_pos: (f64, f64), width: usize, height: usize) -> String {
+fn generate_bouncing_rtt_animation(bounce_pos: (f64, f64), width: usize, height: usize, avg_rtt: f64) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -565,35 +565,25 @@ fn generate_bouncing_logo_animation(bounce_pos: (f64, f64), width: usize, height
         result.push(" ".repeat(effective_width));
     }
     
-    // DVD-style logo
-    let logo = vec![
-        "██████",
-        "██  ██", 
-        "██████",
-        "██",
-        "██",
-    ];
+    // RTT text to bounce
+    let rtt_text = format!("{:.1}ms", avg_rtt);
+    let text_width = rtt_text.len();
+    let text_height = 1;
     
-    let logo_width = 6;
-    let logo_height = logo.len();
+    // Position the RTT text
+    let x_pos = (bounce_pos.0 as usize).min(effective_width.saturating_sub(text_width));
+    let y_pos = (bounce_pos.1 as usize).min(effective_height.saturating_sub(text_height));
     
-    // Position the logo
-    let x_pos = (bounce_pos.0 as usize).min(effective_width.saturating_sub(logo_width));
-    let y_pos = (bounce_pos.1 as usize).min(effective_height.saturating_sub(logo_height));
-    
-    // Draw the logo
-    for (logo_y, logo_line) in logo.iter().enumerate() {
-        let target_y = y_pos + logo_y;
-        if target_y < result.len() {
-            let mut chars: Vec<char> = result[target_y].chars().collect();
-            for (logo_x, logo_char) in logo_line.chars().enumerate() {
-                let target_x = x_pos + logo_x;
-                if target_x < chars.len() {
-                    chars[target_x] = logo_char;
-                }
+    // Draw the RTT text
+    if y_pos < result.len() {
+        let mut chars: Vec<char> = result[y_pos].chars().collect();
+        for (i, c) in rtt_text.chars().enumerate() {
+            let target_x = x_pos + i;
+            if target_x < chars.len() {
+                chars[target_x] = c;
             }
-            result[target_y] = chars.into_iter().collect();
         }
+        result[y_pos] = chars.into_iter().collect();
     }
     
     // Add corner decorations to show bounds
@@ -625,19 +615,24 @@ fn generate_bouncing_logo_animation(bounce_pos: (f64, f64), width: usize, height
         }
     }
     
-    // Add retro text
-    if effective_height > 2 {
-        let retro_text = "RETRO SCREENSAVER MODE";
-        let text_y = effective_height - 2;
-        if text_y < result.len() && effective_width > retro_text.len() {
-            let start_x = (effective_width - retro_text.len()) / 2;
-            let mut chars: Vec<char> = result[text_y].chars().collect();
-            for (i, c) in retro_text.chars().enumerate() {
-                if start_x + i < chars.len() {
-                    chars[start_x + i] = c;
+    // Add trail effect - show previous positions with dots
+    if effective_height > 2 && x_pos > 2 && y_pos > 0 {
+        // Add a subtle trail behind the bouncing text
+        for trail_offset in 1..=3 {
+            let trail_x = x_pos.saturating_sub(trail_offset);
+            let trail_char = match trail_offset {
+                1 => '·',
+                2 => '.',
+                _ => ' ',
+            };
+            
+            if trail_x < effective_width && y_pos < result.len() {
+                let mut chars: Vec<char> = result[y_pos].chars().collect();
+                if trail_x < chars.len() && chars[trail_x] == ' ' {
+                    chars[trail_x] = trail_char;
                 }
+                result[y_pos] = chars.into_iter().collect();
             }
-            result[text_y] = chars.into_iter().collect();
         }
     }
     
