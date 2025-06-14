@@ -37,6 +37,9 @@ The application uses an async event-driven architecture:
 cargo build --release
 cargo run -- --config pingpong.toml
 cargo run -- --host 8.8.8.8 --host google.com --interval 0.5
+cargo run -- --animation plasma    # Force plasma animation
+cargo run -- --animation globe     # Force globe animation  
+cargo run -- --animation bounce    # Force bouncing RTT animation
 ```
 
 ### Testing
@@ -60,6 +63,14 @@ The application uses TOML configuration files (default: `pingpong.toml`):
 - **hosts**: array of {name, address, enabled, interval?}
 
 CLI arguments override config file settings.
+
+### Animation System
+The application features three visual modes selected randomly on startup or via CLI:
+- **Plasma**: Dynamic energy fields with interference patterns responding to network performance
+- **Globe**: Rotating Earth showing continents, oceans, and clouds with global network theme
+- **Bounce**: Classic screensaver-style bouncing RTT text with trail effects
+
+Use `--animation <type>` to force a specific mode, otherwise random selection occurs.
 
 ## Dependencies
 
