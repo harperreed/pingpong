@@ -409,15 +409,16 @@ fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> f64 {
 }
 
 fn calculate_animation_speed(avg_rtt: f64) -> u64 {
-    // Fast networks (< 50ms) spin fast (100ms per frame)
-    // Medium networks (50-150ms) spin medium (300ms per frame)  
-    // Slow networks (> 150ms) spin slow (800ms per frame)
+    // Much faster frame rates for smoother animations
+    // Fast networks (< 50ms) spin very fast (50ms per frame)
+    // Medium networks (50-150ms) spin fast (100ms per frame)  
+    // Slow networks (> 150ms) spin medium (200ms per frame)
     if avg_rtt < 50.0 {
-        100
+        50  // 20 FPS
     } else if avg_rtt < 150.0 {
-        300
+        100 // 10 FPS
     } else {
-        800
+        200 // 5 FPS
     }
 }
 
@@ -561,7 +562,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
             
             if distance <= radius as f64 {
                 // Inside the globe - realistic Earth with rotation
-                let rotation = frame as f64 * 0.08; // Slower, more realistic rotation
+                let rotation = frame as f64 * 0.02; // Much slower, smoother rotation
                 let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
                 let latitude = (dy / radius as f64).asin();
                 
@@ -573,17 +574,17 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
                 let land_probability = (continent_noise1 + continent_noise2 * 0.7 + continent_noise3 * 0.5) * 0.6;
                 
                 // Day/night cycle with terminator line
-                let sun_angle = frame as f64 * 0.05; // Sun position
+                let sun_angle = frame as f64 * 0.015; // Slower sun movement for smooth day/night
                 let day_night = (longitude - sun_angle).cos();
                 let is_day = day_night > 0.0;
                 let terminator_blend = (day_night * 3.0).max(-1.0).min(1.0);
                 
                 // Weather patterns and clouds
-                let cloud_noise = (longitude * 4.0 + frame as f64 * 0.1).sin() * (latitude * 3.0).cos();
+                let cloud_noise = (longitude * 4.0 + frame as f64 * 0.03).sin() * (latitude * 3.0).cos();
                 let has_clouds = cloud_noise > 0.6 && (x + y + frame / 3) % 8 < 3;
                 
                 // Ocean currents and movement
-                let ocean_current = (longitude * 2.0 + frame as f64 * 0.15).sin() * 0.5;
+                let ocean_current = (longitude * 2.0 + frame as f64 * 0.05).sin() * 0.5;
                 
                 let char_to_use = if has_clouds {
                     let cloud_intensity = ((cloud_noise + 1.0) * 4.0) as usize % cloud_patterns.len();
@@ -615,10 +616,10 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
             } else if distance <= (radius + 2) as f64 {
                 // Atmospheric layers with aurora effects
                 let atmo_distance = distance - radius as f64;
-                let rotation = frame as f64 * 0.08;
+                let rotation = frame as f64 * 0.02;
                 let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
                 let latitude = (dy / radius as f64).asin();
-                let aurora_effect = (longitude * 4.0 + frame as f64 * 0.3).sin() * (latitude * 2.0).cos();
+                let aurora_effect = (longitude * 4.0 + frame as f64 * 0.1).sin() * (latitude * 2.0).cos();
                 
                 let char_to_use = if atmo_distance < 1.0 && aurora_effect > 0.8 && latitude.abs() > 0.6 {
                     // Aurora at poles
@@ -651,7 +652,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
     // Add dynamic orbital indicators
     if effective_height > 6 && effective_width > 20 {
         // ISS orbital path
-        let iss_angle = frame as f64 * 0.4;
+        let iss_angle = frame as f64 * 0.1;
         let iss_x = (center_x as f64 + (radius as f64 + 3.0) * iss_angle.cos()) as usize;
         let iss_y = (center_y as f64 + (radius as f64 + 3.0) * iss_angle.sin() * 0.5) as usize;
         
