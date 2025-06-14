@@ -25,6 +25,9 @@ pub enum AnimationType {
     Plasma,
     Globe,
     BouncingLogo,
+    Matrix,
+    Dna,
+    Waveform,
 }
 
 impl AnimationType {
@@ -32,10 +35,13 @@ impl AnimationType {
         use rand::Rng;
         
         let mut rng = rand::thread_rng();
-        match rng.gen_range(0..3) {
+        match rng.gen_range(0..6) {
             0 => AnimationType::Plasma,
             1 => AnimationType::Globe,
-            _ => AnimationType::BouncingLogo,
+            2 => AnimationType::BouncingLogo,
+            3 => AnimationType::Matrix,
+            4 => AnimationType::Dna,
+            _ => AnimationType::Waveform,
         }
     }
 }
@@ -349,6 +355,57 @@ fn render_lore_window(f: &mut Frame, area: Rect, animation_type: AnimationType) 
             "Nostalgic packets, forever in",
             "motion through cyberspace...",
         ],
+        AnimationType::Matrix => vec![
+            "💚 Matrix Digital Rain",
+            "",
+            "Wake up, Neo... Your network",
+            "flows with cascading code that",
+            "reveals the true nature of",
+            "digital reality.",
+            "",
+            "Green characters fall like rain,",
+            "each symbol a packet traversing",
+            "the matrix of interconnected",
+            "systems that bind our world.",
+            "",
+            "The faster your connection,",
+            "the faster the code flows...",
+            "Red pill or blue pill?",
+        ],
+        AnimationType::Dna => vec![
+            "🧬 Network DNA Helix",
+            "",
+            "Your network connection has",
+            "its own genetic code - a double",
+            "helix of data packets and",
+            "acknowledgments spiraling",
+            "through digital space.",
+            "",
+            "Perfect connections show stable,",
+            "graceful helical motion.",
+            "Network issues manifest as",
+            "mutations in the data stream.",
+            "",
+            "The backbone of digital life",
+            "twists through fiber and air...",
+        ],
+        AnimationType::Waveform => vec![
+            "📊 Network Oscilloscope",
+            "",
+            "Your connection pulses like a",
+            "heartbeat on an oscilloscope,",
+            "showing the vital signs of",
+            "data flowing through cables",
+            "and wireless frequencies.",
+            "",
+            "Strong signals create bold,",
+            "clear waveforms. Weak signals",
+            "show irregular patterns and",
+            "interference noise.",
+            "",
+            "Listen to the rhythm of your",
+            "network's electronic pulse...",
+        ],
     };
 
     let paragraph = Paragraph::new(lore_text.join("\n"))
@@ -360,7 +417,10 @@ fn render_lore_window(f: &mut Frame, area: Rect, animation_type: AnimationType) 
 }
 
 fn render_animation_window(f: &mut Frame, area: Rect, _frame: usize, animation_time: f64, avg_rtt: f64, animation_type: AnimationType, bounce_pos: (f64, f64)) {
-    let (animation_art, title) = match animation_type {
+    // Check for connection failure or 0ms ping (suspicious)
+    let has_connection_failure = avg_rtt <= 0.0 || avg_rtt.is_nan() || avg_rtt.is_infinite();
+    
+    let (mut animation_art, title) = match animation_type {
         AnimationType::Plasma => {
             let art = generate_plasma_animation(animation_time, area.width as usize, area.height as usize);
             (art, format!(" Plasma Field - RTT: {:.1}ms ", avg_rtt))
@@ -373,9 +433,32 @@ fn render_animation_window(f: &mut Frame, area: Rect, _frame: usize, animation_t
             let art = generate_bouncing_rtt_animation(bounce_pos, area.width as usize, area.height as usize, avg_rtt);
             (art, format!(" Bouncing RTT - {:.1}ms ", avg_rtt))
         },
+        AnimationType::Matrix => {
+            let art = generate_matrix_animation(animation_time, area.width as usize, area.height as usize, avg_rtt);
+            (art, format!(" Matrix Code - RTT: {:.1}ms ", avg_rtt))
+        },
+        AnimationType::Dna => {
+            let art = generate_dna_animation(animation_time, area.width as usize, area.height as usize, avg_rtt);
+            (art, format!(" DNA Helix - RTT: {:.1}ms ", avg_rtt))
+        },
+        AnimationType::Waveform => {
+            let art = generate_waveform_animation(animation_time, area.width as usize, area.height as usize, avg_rtt);
+            (art, format!(" Network Pulse - RTT: {:.1}ms ", avg_rtt))
+        },
     };
     
-    let color = if avg_rtt < 50.0 {
+    // Overlay flashing red X for connection failures
+    if has_connection_failure {
+        // Flash every 0.5 seconds
+        let flash_on = ((animation_time * 2.0) as usize % 2) == 0;
+        if flash_on {
+            animation_art = generate_connection_failure_overlay(animation_art, area.width as usize, area.height as usize);
+        }
+    }
+    
+    let color = if has_connection_failure {
+        Color::Red
+    } else if avg_rtt < 50.0 {
         Color::Green
     } else if avg_rtt < 150.0 {
         Color::Yellow
@@ -383,8 +466,14 @@ fn render_animation_window(f: &mut Frame, area: Rect, _frame: usize, animation_t
         Color::Red
     };
 
+    let final_title = if has_connection_failure {
+        " CONNECTION FAILED! ".to_string()
+    } else {
+        title
+    };
+
     let paragraph = Paragraph::new(animation_art)
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(Block::default().borders(Borders::ALL).title(final_title))
         .style(Style::default().fg(color))
         .alignment(Alignment::Center);
 
@@ -783,6 +872,544 @@ fn generate_bouncing_rtt_animation(bounce_pos: (f64, f64), width: usize, height:
     }
     
     result.join("\n")
+}
+
+fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+    let mut result = Vec::new();
+    let effective_width = if width > 4 { width - 4 } else { 20 };
+    let effective_height = if height > 6 { height - 6 } else { 12 };
+    
+    // Authentic Matrix characters - katakana, numbers, and symbols from the movie
+    let matrix_chars = [
+        'ア', 'イ', 'ウ', 'エ', 'オ', 'カ', 'キ', 'ク', 'ケ', 'コ',
+        'サ', 'シ', 'ス', 'セ', 'ソ', 'タ', 'チ', 'ツ', 'テ', 'ト',
+        'ナ', 'ニ', 'ヌ', 'ネ', 'ノ', 'ハ', 'ヒ', 'フ', 'ヘ', 'ホ',
+        'マ', 'ミ', 'ム', 'メ', 'モ', 'ヤ', 'ユ', 'ヨ', 'ラ', 'リ',
+        'ル', 'レ', 'ロ', 'ワ', 'ヲ', 'ン', '0', '1', '2', '3',
+        '4', '5', '6', '7', '8', '9', ':', '·', '"', '=',
+        '*', '+', '<', '>', '¦', '|', 'Z', '_'
+    ];
+    
+    // Initialize black background
+    for _ in 0..effective_height {
+        result.push(" ".repeat(effective_width));
+    }
+    
+    // Each column has its own falling stream
+    let num_columns = effective_width;
+    let speed_multiplier = if avg_rtt < 50.0 { 2.0 } else if avg_rtt < 150.0 { 1.5 } else { 1.0 };
+    
+    for x in 0..num_columns {
+        // Stable column seed that doesn't change too rapidly
+        let column_base_seed = x * 17; // Fixed seed per column
+        let time_factor = (time * speed_multiplier * 0.3) as usize; // Slower time progression
+        let column_phase = (x as f64 * 0.618) % 1.0; // Golden ratio for nice distribution
+        
+        // Determine if this column should have a stream (stable decision)
+        let has_stream = (column_base_seed % 13) < 4; // About 30% of columns active
+        
+        if has_stream {
+            // Stream parameters - more stable
+            let stream_speed = 1.0 + ((column_base_seed / 7) % 3) as f64 * 0.3; // Slower varying speeds
+            let stream_length = 8 + (column_base_seed % 8); // Lengths 8-15 (shorter range)
+            let stream_y_offset = (time * speed_multiplier * stream_speed + column_phase * effective_height as f64) % (effective_height as f64 + stream_length as f64 * 2.0);
+            
+            for i in 0..stream_length {
+                let y = (stream_y_offset - i as f64) as isize;
+                
+                if y >= 0 && y < effective_height as isize {
+                    let y_pos = y as usize;
+                    
+                    // More stable character selection - changes slower
+                    let char_seed = (column_base_seed + i * 11 + time_factor / 3) % matrix_chars.len();
+                    let matrix_char = matrix_chars[char_seed];
+                    
+                    // Brightness based on position in stream
+                    let brightness_char = if i == 0 {
+                        // Bright white head (leading character)
+                        matrix_char
+                    } else if i == 1 {
+                        // Bright green second character
+                        matrix_char
+                    } else if i < stream_length / 2 {
+                        // Medium brightness characters
+                        matrix_char
+                    } else {
+                        // Fading tail characters
+                        matrix_char
+                    };
+                    
+                    if y_pos < result.len() {
+                        let mut chars: Vec<char> = result[y_pos].chars().collect();
+                        // Ensure line is long enough
+                        while chars.len() <= x {
+                            chars.push(' ');
+                        }
+                        if x < chars.len() {
+                            chars[x] = brightness_char;
+                        }
+                        result[y_pos] = chars.into_iter().collect();
+                    }
+                }
+            }
+        }
+        
+        // Add occasional static characters (residual code) - much more stable
+        if !has_stream && (column_base_seed % 23) < 3 {
+            let static_y = (column_base_seed / 5) % effective_height;
+            let static_char = matrix_chars[(column_base_seed * 7 + time_factor / 10) % matrix_chars.len()];
+            
+            if static_y < result.len() {
+                let mut chars: Vec<char> = result[static_y].chars().collect();
+                while chars.len() <= x {
+                    chars.push(' ');
+                }
+                if x < chars.len() {
+                    chars[x] = static_char;
+                }
+                result[static_y] = chars.into_iter().collect();
+            }
+        }
+    }
+    
+    // Add network-related glitch effects for poor connections - less flashy
+    if avg_rtt > 150.0 {
+        let glitch_intensity = ((avg_rtt - 150.0) / 100.0).min(0.3);
+        let num_glitches = (effective_height as f64 * effective_width as f64 * glitch_intensity * 0.02) as usize;
+        
+        for _ in 0..num_glitches {
+            // More stable glitch positions - less random jumping
+            let glitch_x = ((time * 3.0) as usize * 7 + effective_width / 3) % effective_width;
+            let glitch_y = ((time * 2.0) as usize * 11 + effective_height / 4) % effective_height;
+            
+            if glitch_y < result.len() {
+                let mut chars: Vec<char> = result[glitch_y].chars().collect();
+                while chars.len() <= glitch_x {
+                    chars.push(' ');
+                }
+                if glitch_x < chars.len() {
+                    // Less harsh glitch characters
+                    let glitch_chars = ['▒', '░', '·', '?', '‾'];
+                    let glitch_seed = ((time * 1.0) as usize + glitch_x + glitch_y) % glitch_chars.len();
+                    chars[glitch_x] = glitch_chars[glitch_seed];
+                }
+                result[glitch_y] = chars.into_iter().collect();
+            }
+        }
+    }
+    
+    // Neo's wake-up message for excellent connections
+    if avg_rtt < 15.0 && ((time * 0.3) as usize % 25) < 4 {
+        let messages = [
+            "Wake up, Neo...",
+            "The Matrix has you...",
+            "Follow the white rabbit",
+            "There is no spoon"
+        ];
+        let message = messages[((time * 0.1) as usize) % messages.len()];
+        let center_y = effective_height / 2;
+        
+        if center_y < result.len() && effective_width > message.len() {
+            let start_x = (effective_width - message.len()) / 2;
+            let mut chars: Vec<char> = result[center_y].chars().collect();
+            
+            // Clear the area around the message
+            for clear_x in start_x.saturating_sub(1)..=(start_x + message.len()).min(effective_width - 1) {
+                while chars.len() <= clear_x {
+                    chars.push(' ');
+                }
+                if clear_x < chars.len() {
+                    chars[clear_x] = ' ';
+                }
+            }
+            
+            // Write the message
+            for (i, c) in message.chars().enumerate() {
+                let msg_x = start_x + i;
+                while chars.len() <= msg_x {
+                    chars.push(' ');
+                }
+                if msg_x < chars.len() {
+                    chars[msg_x] = c;
+                }
+            }
+            result[center_y] = chars.into_iter().collect();
+        }
+    }
+    
+    result.join("\n")
+}
+
+fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+    let mut result = Vec::new();
+    let effective_width = if width > 4 { width - 4 } else { 20 };
+    let effective_height = if height > 6 { height - 6 } else { 12 };
+    
+    // DNA base pairs: A-T, G-C
+    let _bases = ['A', 'T', 'G', 'C'];
+    let backbone_chars = ['│', '║', '|'];
+    let bond_chars = ['─', '═', '~', '≈'];
+    
+    // Initialize the field
+    for _ in 0..effective_height {
+        result.push(" ".repeat(effective_width));
+    }
+    
+    let center_x = effective_width / 2;
+    let helix_width = (effective_width / 4).max(3).min(8);
+    
+    // Generate rotating double helix
+    for y in 0..effective_height {
+        let t = time + y as f64 * 0.3; // Offset each row for helix twist
+        let rotation_speed = if avg_rtt < 50.0 { 2.0 } else { 1.0 }; // Faster rotation for better performance
+        
+        // Left strand position (sine wave)
+        let left_offset = (t * rotation_speed).sin() * helix_width as f64;
+        let left_x = (center_x as f64 + left_offset) as usize;
+        
+        // Right strand position (cosine wave, 180 degrees out of phase)
+        let right_offset = (t * rotation_speed + std::f64::consts::PI).sin() * helix_width as f64;
+        let right_x = (center_x as f64 + right_offset) as usize;
+        
+        if y < result.len() {
+            let mut chars: Vec<char> = result[y].chars().collect();
+            
+            // Draw left backbone
+            if left_x < chars.len() {
+                chars[left_x] = backbone_chars[(y + (time * 2.0) as usize) % backbone_chars.len()];
+            }
+            
+            // Draw right backbone  
+            if right_x < chars.len() {
+                chars[right_x] = backbone_chars[(y + (time * 2.0) as usize) % backbone_chars.len()];
+            }
+            
+            // Draw base pairs when strands are close enough
+            let distance = (left_x as isize - right_x as isize).abs();
+            if distance <= helix_width as isize && distance > 1 {
+                let min_x = left_x.min(right_x);
+                let max_x = left_x.max(right_x);
+                
+                // Draw bonds between base pairs
+                for bond_x in (min_x + 1)..max_x {
+                    if bond_x < chars.len() {
+                        let bond_char = bond_chars[(y + bond_x) % bond_chars.len()];
+                        chars[bond_x] = bond_char;
+                    }
+                }
+                
+                // Add base letters at strand positions
+                let base_pair_index = (y + (time * 0.5) as usize) % 4;
+                let (left_base, right_base) = match base_pair_index {
+                    0 => ('A', 'T'),
+                    1 => ('T', 'A'), 
+                    2 => ('G', 'C'),
+                    _ => ('C', 'G'),
+                };
+                
+                if left_x > 0 && left_x - 1 < chars.len() {
+                    chars[left_x - 1] = left_base;
+                }
+                if right_x + 1 < chars.len() {
+                    chars[right_x + 1] = right_base;
+                }
+            }
+            
+            result[y] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add network quality indicator as DNA mutations/stability
+    if avg_rtt > 100.0 {
+        // Show "mutations" for poor network performance
+        let mutation_rate = ((avg_rtt - 100.0) / 100.0).min(0.5);
+        let num_mutations = (effective_height as f64 * mutation_rate) as usize;
+        
+        for _ in 0..num_mutations {
+            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height;
+            let x = rand::random::<usize>() % effective_width;
+            
+            if y < result.len() {
+                let mut chars: Vec<char> = result[y].chars().collect();
+                if x < chars.len() {
+                    chars[x] = '×'; // Mutation marker
+                }
+                result[y] = chars.into_iter().collect();
+            }
+        }
+    }
+    
+    // Add status information 
+    if effective_height > 2 {
+        let status_y = effective_height - 1;
+        let quality = if avg_rtt < 50.0 { "STABLE" } else if avg_rtt < 150.0 { "DEGRADED" } else { "MUTATING" };
+        let status_text = format!("DNA:{} RTT:{:.1}ms", quality, avg_rtt);
+        
+        if status_y < result.len() && effective_width > status_text.len() {
+            let start_x = (effective_width - status_text.len()) / 2;
+            let mut chars: Vec<char> = result[status_y].chars().collect();
+            for (i, c) in status_text.chars().enumerate() {
+                if start_x + i < chars.len() {
+                    chars[start_x + i] = c;
+                }
+            }
+            result[status_y] = chars.into_iter().collect();
+        }
+    }
+    
+    result.join("\n")
+}
+
+fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+    let mut result = Vec::new();
+    let effective_width = if width > 4 { width - 4 } else { 20 };
+    let effective_height = if height > 6 { height - 6 } else { 12 };
+    
+    // Initialize the field
+    for _ in 0..effective_height {
+        result.push(" ".repeat(effective_width));
+    }
+    
+    let center_y = effective_height / 2;
+    let amplitude = (effective_height / 3).max(2);
+    
+    // Generate oscilloscope-style waveforms
+    for x in 0..effective_width {
+        // Primary network pulse wave - frequency based on RTT performance
+        let frequency = if avg_rtt < 50.0 { 0.3 } else if avg_rtt < 150.0 { 0.2 } else { 0.1 };
+        let wave_phase = time * 2.0 + x as f64 * frequency;
+        let primary_wave = (wave_phase.sin() * amplitude as f64) as isize;
+        
+        // Secondary harmonic for interference patterns
+        let harmonic_wave = (wave_phase * 2.0 + time).sin() * (amplitude as f64 * 0.3);
+        let combined_wave = primary_wave + harmonic_wave as isize;
+        
+        let y_pos = (center_y as isize + combined_wave).max(0).min(effective_height as isize - 1) as usize;
+        
+        // Draw main waveform
+        if y_pos < result.len() {
+            let mut chars: Vec<char> = result[y_pos].chars().collect();
+            if x < chars.len() {
+                let intensity = (combined_wave.abs() as f64 / amplitude as f64).min(1.0);
+                let wave_char = if intensity > 0.8 {
+                    '█'
+                } else if intensity > 0.6 {
+                    '▓'
+                } else if intensity > 0.3 {
+                    '▒'
+                } else {
+                    '░'
+                };
+                chars[x] = wave_char;
+            }
+            result[y_pos] = chars.into_iter().collect();
+        }
+        
+        // Add packet burst visualization
+        if ((time * 5.0 + x as f64 * 0.1) as usize % 20) < 3 {
+            // Packet data as vertical bars
+            let packet_height = 2 + (x % 3);
+            for py in 0..packet_height {
+                let packet_y = (center_y + py).min(effective_height - 1);
+                if packet_y < result.len() {
+                    let mut chars: Vec<char> = result[packet_y].chars().collect();
+                    if x < chars.len() && chars[x] == ' ' {
+                        chars[x] = '|';
+                    }
+                    result[packet_y] = chars.into_iter().collect();
+                }
+            }
+        }
+    }
+    
+    // Add network quality indicators as scope grid
+    for y in (0..effective_height).step_by(effective_height / 4) {
+        if y < result.len() {
+            let mut chars: Vec<char> = result[y].chars().collect();
+            for x in (0..effective_width).step_by(effective_width / 8) {
+                if x < chars.len() && chars[x] == ' ' {
+                    chars[x] = '·';
+                }
+            }
+            result[y] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add center line for zero reference
+    if center_y < result.len() {
+        let mut chars: Vec<char> = result[center_y].chars().collect();
+        for x in (0..effective_width).step_by(4) {
+            if x < chars.len() && chars[x] == ' ' {
+                chars[x] = '─';
+            }
+        }
+        result[center_y] = chars.into_iter().collect();
+    }
+    
+    // Add signal quality and RTT display
+    if effective_height > 3 {
+        let signal_strength = if avg_rtt < 50.0 { "STRONG" } else if avg_rtt < 150.0 { "MEDIUM" } else { "WEAK" };
+        let freq_display = format!("{}Hz", (1000.0 / avg_rtt.max(1.0)) as usize);
+        
+        // Top status line
+        let top_status = format!("SIG:{} {}kHz", signal_strength, ((time * 10.0) as usize % 100));
+        if effective_width > top_status.len() {
+            let start_x = (effective_width - top_status.len()) / 2;
+            let mut chars: Vec<char> = result[0].chars().collect();
+            for (i, c) in top_status.chars().enumerate() {
+                if start_x + i < chars.len() {
+                    chars[start_x + i] = c;
+                }
+            }
+            result[0] = chars.into_iter().collect();
+        }
+        
+        // Bottom status line
+        let bottom_status = format!("RTT:{:.1}ms {}", avg_rtt, freq_display);
+        let status_y = effective_height - 1;
+        if status_y < result.len() && effective_width > bottom_status.len() {
+            let start_x = (effective_width - bottom_status.len()) / 2;
+            let mut chars: Vec<char> = result[status_y].chars().collect();
+            for (i, c) in bottom_status.chars().enumerate() {
+                if start_x + i < chars.len() {
+                    chars[start_x + i] = c;
+                }
+            }
+            result[status_y] = chars.into_iter().collect();
+        }
+    }
+    
+    result.join("\n")
+}
+
+fn generate_connection_failure_overlay(base_animation: String, width: usize, height: usize) -> String {
+    let mut lines: Vec<String> = base_animation.lines().map(|s| s.to_string()).collect();
+    let effective_width = if width > 4 { width - 4 } else { 20 };
+    let effective_height = if height > 6 { height - 6 } else { 12 };
+    
+    // Ensure we have enough lines
+    while lines.len() < effective_height {
+        lines.push(" ".repeat(effective_width));
+    }
+    
+    // Draw a big red X across the entire animation area
+    let center_x = effective_width / 2;
+    let center_y = effective_height / 2;
+    let size = (effective_width.min(effective_height) / 2).max(3);
+    
+    // Draw both diagonals of the X
+    for i in 0..size {
+        // Top-left to bottom-right diagonal
+        let x1 = center_x - size / 2 + i;
+        let y1 = center_y - size / 2 + i;
+        
+        // Top-right to bottom-left diagonal  
+        let x2 = center_x + size / 2 - i;
+        let y2 = center_y - size / 2 + i;
+        
+        // Draw first diagonal
+        if y1 < lines.len() && x1 < effective_width {
+            let mut chars: Vec<char> = lines[y1].chars().collect();
+            // Ensure the line is long enough
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            if x1 < chars.len() {
+                chars[x1] = '█';
+            }
+            lines[y1] = chars.into_iter().collect();
+        }
+        
+        // Draw second diagonal
+        if y2 < lines.len() && x2 < effective_width {
+            let mut chars: Vec<char> = lines[y2].chars().collect();
+            // Ensure the line is long enough
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            if x2 < chars.len() {
+                chars[x2] = '█';
+            }
+            lines[y2] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add failure message at the bottom
+    if effective_height > 3 {
+        let failure_messages = [
+            "CONNECTION LOST",
+            "NETWORK FAILURE", 
+            "PING TIMEOUT",
+            "NO RESPONSE"
+        ];
+        
+        let message_index = (rand::random::<usize>()) % failure_messages.len();
+        let failure_text = failure_messages[message_index];
+        let bottom_y = effective_height - 2;
+        
+        if bottom_y < lines.len() && effective_width > failure_text.len() {
+            let start_x = (effective_width - failure_text.len()) / 2;
+            let mut chars: Vec<char> = lines[bottom_y].chars().collect();
+            
+            // Ensure the line is long enough
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            
+            for (i, c) in failure_text.chars().enumerate() {
+                if start_x + i < chars.len() {
+                    chars[start_x + i] = c;
+                }
+            }
+            lines[bottom_y] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add warning symbols around the X
+    if effective_height > 1 && effective_width > 6 {
+        let warning_chars = ['⚠', '!', '×', '✗'];
+        
+        // Top warning
+        if center_y > 0 {
+            let mut chars: Vec<char> = lines[center_y - 1].chars().collect();
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            if center_x < chars.len() {
+                chars[center_x] = warning_chars[0];
+            }
+            lines[center_y - 1] = chars.into_iter().collect();
+        }
+        
+        // Side warnings
+        if center_y < lines.len() {
+            let mut chars: Vec<char> = lines[center_y].chars().collect();
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            if center_x > 2 && center_x - 3 < chars.len() {
+                chars[center_x - 3] = warning_chars[1];
+            }
+            if center_x + 3 < chars.len() {
+                chars[center_x + 3] = warning_chars[2];
+            }
+            lines[center_y] = chars.into_iter().collect();
+        }
+        
+        // Bottom warning
+        if center_y + 1 < lines.len() {
+            let mut chars: Vec<char> = lines[center_y + 1].chars().collect();
+            while chars.len() < effective_width {
+                chars.push(' ');
+            }
+            if center_x < chars.len() {
+                chars[center_x] = warning_chars[3];
+            }
+            lines[center_y + 1] = chars.into_iter().collect();
+        }
+    }
+    
+    lines.join("\n")
 }
 
 fn render_help(f: &mut Frame) {

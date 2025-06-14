@@ -19,6 +19,9 @@ enum AnimationChoice {
     Plasma,
     Globe,
     Bounce,
+    Matrix,
+    Dna,
+    Waveform,
 }
 
 impl From<AnimationChoice> for AnimationType {
@@ -27,6 +30,9 @@ impl From<AnimationChoice> for AnimationType {
             AnimationChoice::Plasma => AnimationType::Plasma,
             AnimationChoice::Globe => AnimationType::Globe,
             AnimationChoice::Bounce => AnimationType::BouncingLogo,
+            AnimationChoice::Matrix => AnimationType::Matrix,
+            AnimationChoice::Dna => AnimationType::Dna,
+            AnimationChoice::Waveform => AnimationType::Waveform,
         }
     }
 }
@@ -47,7 +53,7 @@ struct Cli {
     #[arg(long)]
     host: Vec<String>,
     
-    /// Animation type: plasma, globe, or bounce
+    /// Animation type: plasma, globe, bounce, matrix, dna, or waveform
     #[arg(short, long, value_enum)]
     animation: Option<AnimationChoice>,
 }
