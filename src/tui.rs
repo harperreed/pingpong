@@ -29,14 +29,10 @@ pub enum AnimationType {
 
 impl AnimationType {
     pub fn random() -> Self {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        use std::time::SystemTime;
+        use rand::Rng;
         
-        let mut hasher = DefaultHasher::new();
-        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos().hash(&mut hasher);
-        
-        match hasher.finish() % 3 {
+        let mut rng = rand::thread_rng();
+        match rng.gen_range(0..3) {
             0 => AnimationType::Plasma,
             1 => AnimationType::Globe,
             _ => AnimationType::BouncingLogo,
@@ -62,6 +58,10 @@ impl Default for TuiState {
     fn default() -> Self {
         // Initialize bouncing logo position and velocity
         let animation_type = AnimationType::random();
+        
+        // Debug: Log which animation was selected
+        eprintln!("🎨 Selected animation: {:?}", animation_type);
+        
         let (bounce_dx, bounce_dy) = match animation_type {
             AnimationType::BouncingLogo => (1.5, 1.2), // Initial velocity
             _ => (0.0, 0.0),
