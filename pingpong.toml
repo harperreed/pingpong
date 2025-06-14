@@ -1,0 +1,52 @@
+# Pingpong Configuration
+# Copy this file to your desired location and customize as needed
+
+[ping]
+# Ping interval in seconds
+interval = 1.0
+# Timeout for each ping in seconds
+timeout = 3.0
+# Number of ping history entries to keep (affects memory usage)
+history_size = 300
+# Packet size in bytes (smaller = less bandwidth usage)
+packet_size = 32
+
+[ui]
+# UI refresh rate in milliseconds (lower = smoother, higher = less CPU)
+refresh_rate = 100
+# Color theme: "dark", "light", or "auto"
+theme = "auto"
+# Show detailed statistics by default
+show_details = true
+# Graph height in terminal rows
+graph_height = 10
+
+# Define hosts to monitor
+# You can add as many as you want, but be mindful of bandwidth usage
+
+[[hosts]]
+name = "Google DNS"
+address = "8.8.8.8"
+enabled = true
+# Uncomment to override global ping interval for this host
+# interval = 2.0
+
+[[hosts]]
+name = "Cloudflare DNS"
+address = "1.1.1.1"
+enabled = true
+
+[[hosts]]
+name = "Google"
+address = "google.com"
+enabled = true
+
+[[hosts]]
+name = "GitHub"
+address = "github.com"
+enabled = false  # Disabled by default
+
+[[hosts]]
+name = "Local Router"
+address = "192.168.1.1"
+enabled = false  # Enable if you want to monitor local connectivity

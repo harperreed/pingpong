@@ -1,0 +1,27 @@
+[package]
+name = "pingpong"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TUI and terminal handling
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime and utilities
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+
+# Networking and ping
+surge-ping = "0.8"
+dns-lookup = "2.0"
+
+# Configuration and CLI
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+clap = { version = "4.0", features = ["derive"] }
+
+# Utilities
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "v5"] }
