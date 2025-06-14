@@ -423,33 +423,53 @@ fn calculate_animation_speed(avg_rtt: f64) -> u64 {
 
 fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> String {
     let mut result = Vec::new();
-    let effective_width = if width > 4 { width - 4 } else { 20 }; // Account for borders
-    let effective_height = if height > 6 { height - 6 } else { 12 }; // Account for borders and title
+    let effective_width = if width > 4 { width - 4 } else { 20 };
+    let effective_height = if height > 6 { height - 6 } else { 12 };
     
-    // Plasma intensity characters from low to high
-    let intensity_chars = [' ', '░', '▒', '▓', '█', '▓', '▒', '░'];
-    let energy_chars = ['·', '•', '○', '●', '◉', '⚫', '⬟', '⬢'];
+    // Advanced plasma characters with multiple layers
+    let plasma_layers = [
+        [' ', '░', '▒', '▓', '█', '▓', '▒', '░', ' '],      // Base layer
+        ['·', '•', '○', '●', '◉', '⚫', '◯', '○', '·'],      // Energy layer  
+        [' ', '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'],      // Vertical bars
+        [' ', '▖', '▗', '▘', '▝', '▞', '▟', '▙', '█'],      // Block patterns
+        ['˙', '∘', '○', '◌', '◯', '●', '◉', '⬢', '⬡'],      // Geometric
+    ];
     
-    // Create plasma field using sine waves
+    let fx_chars = ['✦', '✧', '✩', '✪', '✫', '✬', '✭', '✮', '✯', '✰', '✱', '✲', '⚡', '⟡', '⟢', '⟣'];
+    
+    // Create advanced plasma field
     for y in 0..effective_height {
         let mut line = String::new();
         for x in 0..effective_width {
-            // Create interference pattern with multiple sine waves
-            let time = frame as f64 * 0.3;
-            let wave1 = ((x as f64 * 0.2 + time).sin() * 2.0) as i32;
-            let wave2 = ((y as f64 * 0.3 + time * 1.2).sin() * 2.0) as i32;
-            let wave3 = (((x + y) as f64 * 0.15 + time * 0.8).sin() * 1.5) as i32;
+            let time = frame as f64 * 0.2;
             
-            // Combine waves to get intensity
-            let intensity = (wave1 + wave2 + wave3 + 6) / 2; // Normalize to 0-6 range
-            let intensity = intensity.max(0).min(7) as usize;
+            // Multiple interference waves with different frequencies
+            let wave1 = (x as f64 * 0.3 + time * 1.5).sin();
+            let wave2 = (y as f64 * 0.25 + time * 1.8).sin();
+            let wave3 = ((x + y) as f64 * 0.15 + time * 0.9).sin();
+            let wave4 = ((x as f64 * 0.1).cos() + (y as f64 * 0.12).cos() + time * 2.1).sin();
+            let wave5 = (((x * x + y * y) as f64).sqrt() * 0.2 - time * 1.2).sin(); // Radial wave
             
-            // Use different character sets for variation
-            let use_energy_chars = (x + y + frame) % 3 == 0;
-            let char_to_use = if use_energy_chars {
-                energy_chars[intensity]
+            // Turbulence function for more organic feel
+            let turbulence = ((x as f64 * 0.05).sin() * (y as f64 * 0.07).cos() + time * 0.5).sin() * 0.3;
+            
+            // Combine all waves with different weights
+            let intensity = (wave1 * 2.0 + wave2 * 1.8 + wave3 * 1.5 + wave4 * 1.2 + wave5 * 0.8 + turbulence) * 0.8;
+            
+            // Map to character index (0-8)
+            let char_index = ((intensity + 3.0) * 1.33).max(0.0).min(8.0) as usize;
+            
+            // Choose layer based on position and time for variation
+            let layer_choice = (x + y + frame / 3) % plasma_layers.len();
+            let base_char = plasma_layers[layer_choice][char_index];
+            
+            // Add special effects for high intensity areas
+            let char_to_use = if intensity > 2.0 && (x + y + frame) % 7 == 0 {
+                fx_chars[frame % fx_chars.len()]
+            } else if intensity > 1.5 && (x * 2 + y + frame / 2) % 11 == 0 {
+                fx_chars[(frame / 2) % fx_chars.len()]
             } else {
-                intensity_chars[intensity]
+                base_char
             };
             
             line.push(char_to_use);
@@ -457,30 +477,48 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
         result.push(line);
     }
     
-    // Add center decoration
-    if effective_height > 8 {
-        let center_y = effective_height / 2;
-        if center_y < result.len() {
-            let center_line = &mut result[center_y];
-            if effective_width > 12 {
-                let center_x = effective_width / 2;
-                let decoration = match frame % 8 {
-                    0 => "⚡",
-                    1 => "⚡",
-                    2 => "✦",
-                    3 => "✧",
-                    4 => "✦",
-                    5 => "✧",
-                    6 => "⚡",
-                    7 => "⚡",
-                    _ => "⚡",
+    // Add dynamic energy nodes that move around
+    let num_nodes = 3 + (frame / 20) % 3; // 3-5 nodes
+    for node in 0..num_nodes {
+        let node_time = frame as f64 * 0.2 + node as f64 * 2.0;
+        let node_x = ((node_time * 0.7).sin() * (effective_width as f64 - 10.0) / 2.0 + effective_width as f64 / 2.0) as usize;
+        let node_y = ((node_time * 0.9 + node as f64).cos() * (effective_height as f64 - 6.0) / 2.0 + effective_height as f64 / 2.0) as usize;
+        
+        if node_x < effective_width && node_y < effective_height && node_y < result.len() {
+            let mut chars: Vec<char> = result[node_y].chars().collect();
+            if node_x < chars.len() {
+                let node_char = match (frame + node * 3) % 6 {
+                    0 => '◉',
+                    1 => '⚡',
+                    2 => '✦',
+                    3 => '●',
+                    4 => '⟡',
+                    _ => '◯',
                 };
-                // Replace center character with decoration
-                let mut chars: Vec<char> = center_line.chars().collect();
-                if center_x < chars.len() {
-                    chars[center_x] = decoration.chars().next().unwrap_or('⚡');
-                }
-                *center_line = chars.into_iter().collect();
+                chars[node_x] = node_char;
+            }
+            result[node_y] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add energy field borders with flowing effect
+    if effective_height > 4 && effective_width > 8 {
+        let flow_chars = ['─', '━', '═', '▬', '▭'];
+        let flow_char = flow_chars[(frame / 2) % flow_chars.len()];
+        
+        // Top and bottom borders
+        for x in 0..effective_width {
+            if x < result[0].len() && (x + frame) % 4 < 2 {
+                let mut chars: Vec<char> = result[0].chars().collect();
+                chars[x] = flow_char;
+                result[0] = chars.into_iter().collect();
+            }
+            
+            let last_idx = result.len() - 1;
+            if x < result[last_idx].len() && (x + frame + 2) % 4 < 2 {
+                let mut chars: Vec<char> = result[last_idx].chars().collect();
+                chars[x] = flow_char;
+                result[last_idx] = chars.into_iter().collect();
             }
         }
     }
@@ -493,10 +531,22 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
     
-    // Globe symbols for different parts of the Earth
-    let land_chars = ['▓', '█', '▆', '▅'];
-    let ocean_chars = ['~', '≈', '∼', '◦'];
-    let cloud_chars = ['☁', '☁', '⋅', ' '];
+    // Enhanced Earth surface with realistic continent patterns
+    let continent_layers = [
+        ['▓', '█', '▆', '▅', '▄', '▃', '▂', '▁'],          // Mountain ranges
+        ['▰', '▱', '▮', '▯', '◪', '◫', '◨', '◧'],          // Plains and forests
+        ['⬛', '⬜', '◼', '◻', '▪', '▫', '■', '□'],          // Urban areas
+    ];
+    
+    let ocean_layers = [
+        ['~', '≈', '∼', '◦', '∘', '○', '◯', '●'],          // Ocean waves
+        ['░', '▒', '▓', '█', '▆', '▅', '▄', '▃'],          // Ocean depths
+        ['⋅', '∙', '•', '◘', '◙', '○', '◯', '●'],          // Currents
+    ];
+    
+    let atmosphere_chars = ['⋅', '∘', '○', '◯', '●', '◉', '⬡', '⬢'];
+    let cloud_patterns = ['☁', '⛅', '⛈', '🌤', '⋅', '∘', ' ', ' '];
+    let star_chars = ['✦', '✧', '✩', '✪', '✫', '✬', '✭', '✮', '*', '·'];
     
     let center_x = effective_width / 2;
     let center_y = effective_height / 2;
@@ -505,60 +555,138 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
     for y in 0..effective_height {
         let mut line = String::new();
         for x in 0..effective_width {
-            let dx = x as i32 - center_x as i32;
-            let dy = y as i32 - center_y as i32;
-            let distance = ((dx * dx + dy * dy) as f64).sqrt();
+            let dx = x as f64 - center_x as f64;
+            let dy = y as f64 - center_y as f64;
+            let distance = (dx * dx + dy * dy).sqrt();
             
             if distance <= radius as f64 {
-                // Inside the globe - show rotating Earth
-                let angle = ((x as f64 - center_x as f64) / radius as f64 + frame as f64 * 0.1).sin();
-                let latitude = (y as f64 - center_y as f64) / radius as f64;
+                // Inside the globe - realistic Earth with rotation
+                let rotation = frame as f64 * 0.08; // Slower, more realistic rotation
+                let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
+                let latitude = (dy / radius as f64).asin();
                 
-                // Simulate continents and oceans
-                let is_land = angle > 0.3 || (angle > -0.2 && latitude.abs() < 0.5);
-                let has_clouds = ((x + y + frame) % 7) == 0;
+                // Create realistic continent patterns using multiple noise functions
+                let continent_noise1 = (longitude * 2.0).sin() * (latitude * 3.0).cos();
+                let continent_noise2 = (longitude * 3.0 + 1.5).cos() * (latitude * 2.0).sin();
+                let continent_noise3 = (longitude * 1.5 - 0.7).sin() * (latitude * 4.0).cos();
+                
+                let land_probability = (continent_noise1 + continent_noise2 * 0.7 + continent_noise3 * 0.5) * 0.6;
+                
+                // Day/night cycle with terminator line
+                let sun_angle = frame as f64 * 0.05; // Sun position
+                let day_night = (longitude - sun_angle).cos();
+                let is_day = day_night > 0.0;
+                let terminator_blend = (day_night * 3.0).max(-1.0).min(1.0);
+                
+                // Weather patterns and clouds
+                let cloud_noise = (longitude * 4.0 + frame as f64 * 0.1).sin() * (latitude * 3.0).cos();
+                let has_clouds = cloud_noise > 0.6 && (x + y + frame / 3) % 8 < 3;
+                
+                // Ocean currents and movement
+                let ocean_current = (longitude * 2.0 + frame as f64 * 0.15).sin() * 0.5;
                 
                 let char_to_use = if has_clouds {
-                    cloud_chars[frame % cloud_chars.len()]
-                } else if is_land {
-                    land_chars[(x + y + frame) % land_chars.len()]
+                    let cloud_intensity = ((cloud_noise + 1.0) * 4.0) as usize % cloud_patterns.len();
+                    cloud_patterns[cloud_intensity]
+                } else if land_probability > 0.1 {
+                    // Land features based on latitude and terrain type
+                    let terrain_type = ((latitude.abs() * 2.0 + longitude * 1.5) as usize) % continent_layers.len();
+                    let elevation = ((land_probability + 1.0) * 4.0) as usize % continent_layers[terrain_type].len();
+                    
+                    // Adjust for day/night (darker at night)
+                    if is_day || terminator_blend > -0.5 {
+                        continent_layers[terrain_type][elevation]
+                    } else {
+                        // Nighttime - show city lights occasionally
+                        if elevation > 4 && (x + y + frame / 5) % 12 == 0 {
+                            '●' // City lights
+                        } else {
+                            '▓' // Darker land
+                        }
+                    }
                 } else {
-                    ocean_chars[(x + y + frame / 2) % ocean_chars.len()]
+                    // Ocean with current effects
+                    let ocean_type = (ocean_current + 1.0) as usize % ocean_layers.len();
+                    let wave_intensity = ((distance / radius as f64 + frame as f64 * 0.1) * 4.0) as usize % ocean_layers[ocean_type].len();
+                    ocean_layers[ocean_type][wave_intensity]
                 };
                 
                 line.push(char_to_use);
-            } else if distance <= (radius + 1) as f64 {
-                // Atmosphere
-                line.push('·');
-            } else {
-                // Space
-                if ((x + y + frame) % 15) == 0 {
-                    line.push('*'); // Stars
+            } else if distance <= (radius + 2) as f64 {
+                // Atmospheric layers with aurora effects
+                let atmo_distance = distance - radius as f64;
+                let rotation = frame as f64 * 0.08;
+                let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
+                let latitude = (dy / radius as f64).asin();
+                let aurora_effect = (longitude * 4.0 + frame as f64 * 0.3).sin() * (latitude * 2.0).cos();
+                
+                let char_to_use = if atmo_distance < 1.0 && aurora_effect > 0.8 && latitude.abs() > 0.6 {
+                    // Aurora at poles
+                    let aurora_chars = ['◉', '⚡', '✦', '◯', '●'];
+                    aurora_chars[frame % aurora_chars.len()]
                 } else {
-                    line.push(' ');
-                }
+                    // Normal atmosphere
+                    let atmo_intensity = (atmo_distance * 4.0) as usize % atmosphere_chars.len();
+                    atmosphere_chars[atmo_intensity]
+                };
+                
+                line.push(char_to_use);
+            } else {
+                // Deep space with twinkling stars and satellites
+                let star_seed = x * 17 + y * 23 + frame / 8;
+                let char_to_use = if star_seed % 25 == 0 {
+                    star_chars[star_seed % star_chars.len()]
+                } else if star_seed % 47 == 0 && frame % 15 < 3 {
+                    '🛰' // Occasional satellite
+                } else {
+                    ' '
+                };
+                
+                line.push(char_to_use);
             }
         }
         result.push(line);
     }
     
-    // Add spinning indicator
-    if effective_height > 4 {
-        let indicator_y = effective_height - 2;
-        if indicator_y < result.len() {
-            let spin_chars = ['◐', '◓', '◑', '◒'];
-            let spin_char = spin_chars[frame % spin_chars.len()];
-            let indicator_text = format!("🌍 Earth spins {}", spin_char);
+    // Add dynamic orbital indicators
+    if effective_height > 6 && effective_width > 20 {
+        // ISS orbital path
+        let iss_angle = frame as f64 * 0.4;
+        let iss_x = (center_x as f64 + (radius as f64 + 3.0) * iss_angle.cos()) as usize;
+        let iss_y = (center_y as f64 + (radius as f64 + 3.0) * iss_angle.sin() * 0.5) as usize;
+        
+        if iss_x < effective_width && iss_y < effective_height && iss_y < result.len() {
+            let mut chars: Vec<char> = result[iss_y].chars().collect();
+            if iss_x < chars.len() {
+                chars[iss_x] = '🚀';
+            }
+            result[iss_y] = chars.into_iter().collect();
+        }
+    }
+    
+    // Add status information with global network pulse
+    if effective_height > 3 {
+        let status_y = effective_height - 1;
+        if status_y < result.len() {
+            let pulse_chars = ['◐', '◓', '◑', '◒', '◉', '●', '○', '◯'];
+            let pulse_char = pulse_chars[frame % pulse_chars.len()];
+            let time_indicator = match (frame / 10) % 24 {
+                0..=5 => "🌙 Night",
+                6..=11 => "🌅 Dawn", 
+                12..=17 => "☀️ Day",
+                _ => "🌆 Dusk",
+            };
+            let status_text = format!("Global Network {} {}", pulse_char, time_indicator);
             
-            if effective_width > indicator_text.len() {
-                let start_x = (effective_width - indicator_text.len()) / 2;
-                let mut chars: Vec<char> = result[indicator_y].chars().collect();
-                for (i, c) in indicator_text.chars().enumerate() {
+            if effective_width > status_text.len() {
+                let start_x = (effective_width - status_text.len()) / 2;
+                let mut chars: Vec<char> = result[status_y].chars().collect();
+                for (i, c) in status_text.chars().enumerate() {
                     if start_x + i < chars.len() {
                         chars[start_x + i] = c;
                     }
                 }
-                result[indicator_y] = chars.into_iter().collect();
+                result[status_y] = chars.into_iter().collect();
             }
         }
     }
