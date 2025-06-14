@@ -47,6 +47,7 @@ pub struct TuiState {
     pub paused: bool,
     pub animation_frame: usize,
     pub last_frame_time: Instant,
+    pub start_time: Instant,
     pub animation_type: AnimationType,
     pub bounce_x: f64,
     pub bounce_y: f64,
@@ -64,13 +65,16 @@ impl TuiState {
             _ => (0.0, 0.0),
         };
         
+        let now = Instant::now();
+        
         Self {
             selected_tab: 0,
             selected_host: 0,
             show_help: false,
             paused: false,
             animation_frame: 0,
-            last_frame_time: Instant::now(),
+            last_frame_time: now,
+            start_time: now,
             animation_type,
             bounce_x: 20.0, // Starting position
             bounce_y: 8.0,
@@ -133,7 +137,7 @@ impl TuiApp {
         
         let now = Instant::now();
         if now.duration_since(self.state.last_frame_time).as_millis() > animation_speed as u128 {
-            self.state.animation_frame = (self.state.animation_frame + 1) % 8;
+            self.state.animation_frame = self.state.animation_frame.wrapping_add(1);
             self.state.last_frame_time = now;
             
             // Update bouncing logo position if that's the current animation
@@ -143,6 +147,7 @@ impl TuiApp {
         }
         
         let animation_frame = self.state.animation_frame;
+        let animation_time = self.state.start_time.elapsed().as_secs_f64();
         let animation_type = self.state.animation_type;
         let bounce_pos = (self.state.bounce_x, self.state.bounce_y);
         
@@ -150,7 +155,7 @@ impl TuiApp {
             if show_help {
                 render_help(f);
             } else {
-                render_main(f, stats, &host_info, animation_frame, avg_rtt, animation_type, bounce_pos);
+                render_main(f, stats, &host_info, animation_frame, animation_time, avg_rtt, animation_type, bounce_pos);
             }
         })?;
         Ok(())
@@ -197,7 +202,7 @@ impl TuiApp {
     }
 }
 
-fn render_main(f: &mut Frame, stats: &HashMap<String, PingStats>, host_info: &[(String, String)], animation_frame: usize, avg_rtt: f64, animation_type: AnimationType, bounce_pos: (f64, f64)) {
+fn render_main(f: &mut Frame, stats: &HashMap<String, PingStats>, host_info: &[(String, String)], animation_frame: usize, animation_time: f64, avg_rtt: f64, animation_type: AnimationType, bounce_pos: (f64, f64)) {
     let size = f.area();
 
     // Create 4-window layout: left side split top/bottom, right side single window
@@ -227,7 +232,7 @@ fn render_main(f: &mut Frame, stats: &HashMap<String, PingStats>, host_info: &[(
     render_lore_window(f, left_chunks[1], animation_type);
     
     // Render animation (right side)
-    render_animation_window(f, main_chunks[1], animation_frame, avg_rtt, animation_type, bounce_pos);
+    render_animation_window(f, main_chunks[1], animation_frame, animation_time, avg_rtt, animation_type, bounce_pos);
 }
 
 fn render_pings_window(f: &mut Frame, area: Rect, stats: &HashMap<String, PingStats>, host_info: &[(String, String)]) {
@@ -354,14 +359,14 @@ fn render_lore_window(f: &mut Frame, area: Rect, animation_type: AnimationType) 
     f.render_widget(paragraph, area);
 }
 
-fn render_animation_window(f: &mut Frame, area: Rect, frame: usize, avg_rtt: f64, animation_type: AnimationType, bounce_pos: (f64, f64)) {
+fn render_animation_window(f: &mut Frame, area: Rect, _frame: usize, animation_time: f64, avg_rtt: f64, animation_type: AnimationType, bounce_pos: (f64, f64)) {
     let (animation_art, title) = match animation_type {
         AnimationType::Plasma => {
-            let art = generate_plasma_animation(frame, area.width as usize, area.height as usize);
+            let art = generate_plasma_animation(animation_time, area.width as usize, area.height as usize);
             (art, format!(" Plasma Field - RTT: {:.1}ms ", avg_rtt))
         },
         AnimationType::Globe => {
-            let art = generate_globe_animation(frame, area.width as usize, area.height as usize);
+            let art = generate_globe_animation(animation_time, area.width as usize, area.height as usize);
             (art, format!(" Digital Earth - RTT: {:.1}ms ", avg_rtt))
         },
         AnimationType::BouncingLogo => {
@@ -422,7 +427,7 @@ fn calculate_animation_speed(avg_rtt: f64) -> u64 {
     }
 }
 
-fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> String {
+fn generate_plasma_animation(time: f64, width: usize, height: usize) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -439,10 +444,10 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
     let fx_chars = ['✦', '✧', '✩', '✪', '✫', '✬', '✭', '✮', '✯', '✰', '✱', '✲', '⚡', '⟡', '⟢', '⟣'];
     
     // Create advanced plasma field
+    let time_int = (time * 10.0) as usize;
     for y in 0..effective_height {
         let mut line = String::new();
         for x in 0..effective_width {
-            let time = frame as f64 * 0.2;
             
             // Multiple interference waves with different frequencies
             let wave1 = (x as f64 * 0.3 + time * 1.5).sin();
@@ -461,14 +466,14 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
             let char_index = ((intensity + 3.0) * 1.33).max(0.0).min(8.0) as usize;
             
             // Choose layer based on position and time for variation
-            let layer_choice = (x + y + frame / 3) % plasma_layers.len();
+            let layer_choice = (x + y + time_int / 3) % plasma_layers.len();
             let base_char = plasma_layers[layer_choice][char_index];
             
             // Add special effects for high intensity areas
-            let char_to_use = if intensity > 2.0 && (x + y + frame) % 7 == 0 {
-                fx_chars[frame % fx_chars.len()]
-            } else if intensity > 1.5 && (x * 2 + y + frame / 2) % 11 == 0 {
-                fx_chars[(frame / 2) % fx_chars.len()]
+            let char_to_use = if intensity > 2.0 && (x + y + time_int) % 7 == 0 {
+                fx_chars[time_int % fx_chars.len()]
+            } else if intensity > 1.5 && (x * 2 + y + time_int / 2) % 11 == 0 {
+                fx_chars[(time_int / 2) % fx_chars.len()]
             } else {
                 base_char
             };
@@ -479,16 +484,16 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
     }
     
     // Add dynamic energy nodes that move around
-    let num_nodes = 3 + (frame / 20) % 3; // 3-5 nodes
+    let num_nodes = 3 + ((time * 0.5) as usize) % 3; // 3-5 nodes
     for node in 0..num_nodes {
-        let node_time = frame as f64 * 0.2 + node as f64 * 2.0;
+        let node_time = time + node as f64 * 2.0;
         let node_x = ((node_time * 0.7).sin() * (effective_width as f64 - 10.0) / 2.0 + effective_width as f64 / 2.0) as usize;
         let node_y = ((node_time * 0.9 + node as f64).cos() * (effective_height as f64 - 6.0) / 2.0 + effective_height as f64 / 2.0) as usize;
         
         if node_x < effective_width && node_y < effective_height && node_y < result.len() {
             let mut chars: Vec<char> = result[node_y].chars().collect();
             if node_x < chars.len() {
-                let node_char = match (frame + node * 3) % 6 {
+                let node_char = match ((time * 3.0) as usize + node * 3) % 6 {
                     0 => '◉',
                     1 => '⚡',
                     2 => '✦',
@@ -505,18 +510,19 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
     // Add energy field borders with flowing effect
     if effective_height > 4 && effective_width > 8 {
         let flow_chars = ['─', '━', '═', '▬', '▭'];
-        let flow_char = flow_chars[(frame / 2) % flow_chars.len()];
+        let flow_char = flow_chars[((time * 5.0) as usize / 2) % flow_chars.len()];
         
         // Top and bottom borders
+        let time_int_border = (time * 10.0) as usize;
         for x in 0..effective_width {
-            if x < result[0].len() && (x + frame) % 4 < 2 {
+            if x < result[0].len() && (x + time_int_border) % 4 < 2 {
                 let mut chars: Vec<char> = result[0].chars().collect();
                 chars[x] = flow_char;
                 result[0] = chars.into_iter().collect();
             }
             
             let last_idx = result.len() - 1;
-            if x < result[last_idx].len() && (x + frame + 2) % 4 < 2 {
+            if x < result[last_idx].len() && (x + time_int_border + 2) % 4 < 2 {
                 let mut chars: Vec<char> = result[last_idx].chars().collect();
                 chars[x] = flow_char;
                 result[last_idx] = chars.into_iter().collect();
@@ -527,7 +533,7 @@ fn generate_plasma_animation(frame: usize, width: usize, height: usize) -> Strin
     result.join("\n")
 }
 
-fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String {
+fn generate_globe_animation(time: f64, width: usize, height: usize) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -562,7 +568,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
             
             if distance <= radius as f64 {
                 // Inside the globe - realistic Earth with rotation
-                let rotation = frame as f64 * 0.02; // Much slower, smoother rotation
+                let rotation = time * 0.2; // Smooth continuous rotation
                 let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
                 let latitude = (dy / radius as f64).asin();
                 
@@ -574,17 +580,17 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
                 let land_probability = (continent_noise1 + continent_noise2 * 0.7 + continent_noise3 * 0.5) * 0.6;
                 
                 // Day/night cycle with terminator line
-                let sun_angle = frame as f64 * 0.015; // Slower sun movement for smooth day/night
+                let sun_angle = time * 0.15; // Smooth sun movement
                 let day_night = (longitude - sun_angle).cos();
                 let is_day = day_night > 0.0;
                 let terminator_blend = (day_night * 3.0).max(-1.0).min(1.0);
                 
                 // Weather patterns and clouds
-                let cloud_noise = (longitude * 4.0 + frame as f64 * 0.03).sin() * (latitude * 3.0).cos();
-                let has_clouds = cloud_noise > 0.6 && (x + y + frame / 3) % 8 < 3;
+                let cloud_noise = (longitude * 4.0 + time * 0.3).sin() * (latitude * 3.0).cos();
+                let has_clouds = cloud_noise > 0.6 && (x + y + (time * 3.0) as usize) % 8 < 3;
                 
                 // Ocean currents and movement
-                let ocean_current = (longitude * 2.0 + frame as f64 * 0.05).sin() * 0.5;
+                let ocean_current = (longitude * 2.0 + time * 0.5).sin() * 0.5;
                 
                 let char_to_use = if has_clouds {
                     let cloud_intensity = ((cloud_noise + 1.0) * 4.0) as usize % cloud_patterns.len();
@@ -599,7 +605,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
                         continent_layers[terrain_type][elevation]
                     } else {
                         // Nighttime - show city lights occasionally
-                        if elevation > 4 && (x + y + frame / 5) % 12 == 0 {
+                        if elevation > 4 && (x + y + (time * 2.0) as usize) % 12 == 0 {
                             '●' // City lights
                         } else {
                             '▓' // Darker land
@@ -608,7 +614,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
                 } else {
                     // Ocean with current effects
                     let ocean_type = (ocean_current + 1.0) as usize % ocean_layers.len();
-                    let wave_intensity = ((distance / radius as f64 + frame as f64 * 0.1) * 4.0) as usize % ocean_layers[ocean_type].len();
+                    let wave_intensity = ((distance / radius as f64 + time) * 4.0) as usize % ocean_layers[ocean_type].len();
                     ocean_layers[ocean_type][wave_intensity]
                 };
                 
@@ -616,15 +622,15 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
             } else if distance <= (radius + 2) as f64 {
                 // Atmospheric layers with aurora effects
                 let atmo_distance = distance - radius as f64;
-                let rotation = frame as f64 * 0.02;
+                let rotation = time * 0.2;
                 let longitude = (dx / radius as f64).atan2(-dy / radius as f64) + rotation;
                 let latitude = (dy / radius as f64).asin();
-                let aurora_effect = (longitude * 4.0 + frame as f64 * 0.1).sin() * (latitude * 2.0).cos();
+                let aurora_effect = (longitude * 4.0 + time).sin() * (latitude * 2.0).cos();
                 
                 let char_to_use = if atmo_distance < 1.0 && aurora_effect > 0.8 && latitude.abs() > 0.6 {
                     // Aurora at poles
                     let aurora_chars = ['◉', '⚡', '✦', '◯', '●'];
-                    aurora_chars[frame % aurora_chars.len()]
+                    aurora_chars[(time * 5.0) as usize % aurora_chars.len()]
                 } else {
                     // Normal atmosphere
                     let atmo_intensity = (atmo_distance * 4.0) as usize % atmosphere_chars.len();
@@ -634,10 +640,10 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
                 line.push(char_to_use);
             } else {
                 // Deep space with twinkling stars and satellites
-                let star_seed = x * 17 + y * 23 + frame / 8;
+                let star_seed = x * 17 + y * 23 + (time * 1.25) as usize;
                 let char_to_use = if star_seed % 25 == 0 {
                     star_chars[star_seed % star_chars.len()]
-                } else if star_seed % 47 == 0 && frame % 15 < 3 {
+                } else if star_seed % 47 == 0 && (time * 1.0) as usize % 15 < 3 {
                     '🛰' // Occasional satellite
                 } else {
                     ' '
@@ -652,7 +658,7 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
     // Add dynamic orbital indicators
     if effective_height > 6 && effective_width > 20 {
         // ISS orbital path
-        let iss_angle = frame as f64 * 0.1;
+        let iss_angle = time;
         let iss_x = (center_x as f64 + (radius as f64 + 3.0) * iss_angle.cos()) as usize;
         let iss_y = (center_y as f64 + (radius as f64 + 3.0) * iss_angle.sin() * 0.5) as usize;
         
@@ -670,8 +676,8 @@ fn generate_globe_animation(frame: usize, width: usize, height: usize) -> String
         let status_y = effective_height - 1;
         if status_y < result.len() {
             let pulse_chars = ['◐', '◓', '◑', '◒', '◉', '●', '○', '◯'];
-            let pulse_char = pulse_chars[frame % pulse_chars.len()];
-            let time_indicator = match (frame / 10) % 24 {
+            let pulse_char = pulse_chars[(time * 3.0) as usize % pulse_chars.len()];
+            let time_indicator = match ((time * 0.1) as usize) % 24 {
                 0..=5 => "🌙 Night",
                 6..=11 => "🌅 Dawn", 
                 12..=17 => "☀️ Day",
