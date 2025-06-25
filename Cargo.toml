@@ -2,6 +2,8 @@
 name = "pingpong"
 version = "0.1.5"
 edition = "2021"
+description = "A Rust-based TUI ping utility for monitoring network connectivity to multiple hosts simultaneously"
+license = "MIT"
 
 [dependencies]
 # TUI and terminal handling
