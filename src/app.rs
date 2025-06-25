@@ -11,13 +11,14 @@ use tokio::time;
 use crate::config::Config;
 use crate::ping::{PingEngine, PingEvent};
 use crate::stats::PingStats;
-use crate::tui::{TuiApp, AnimationType};
+use crate::tui::{AnimationType, TuiApp};
 
 pub struct App {
     config: Config,
     tui: TuiApp,
     stats: Arc<RwLock<HashMap<String, PingStats>>>,
     event_rx: mpsc::UnboundedReceiver<PingEvent>,
+    #[allow(dead_code)]
     host_info: Vec<(String, String)>,
 }
 
@@ -60,8 +61,9 @@ impl App {
 
     pub async fn run(mut self) -> Result<()> {
         // Main event loop
-        let mut ui_update_interval = time::interval(Duration::from_millis(self.config.ui.refresh_rate));
-        
+        let mut ui_update_interval =
+            time::interval(Duration::from_millis(self.config.ui.refresh_rate));
+
         loop {
             tokio::select! {
                 // Handle ping events
@@ -70,15 +72,15 @@ impl App {
                         self.handle_ping_event(ping_event).await;
                     }
                 }
-                
+
                 // Update UI
                 _ = ui_update_interval.tick() => {
                     let stats = self.stats.read().await;
-                    if let Err(e) = self.tui.draw(&*stats).await {
+                    if let Err(e) = self.tui.draw(&stats).await {
                         eprintln!("TUI error: {}", e);
                         break;
                     }
-                    
+
                     // Handle user input
                     if let Ok(should_quit) = self.tui.handle_events().await {
                         if should_quit {
@@ -88,7 +90,7 @@ impl App {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -98,7 +100,7 @@ impl App {
         let host_stats = stats
             .entry(event.host_id.clone())
             .or_insert_with(|| PingStats::new(self.config.ping.history_size));
-        
+
         host_stats.add_result(&event.result);
     }
 }

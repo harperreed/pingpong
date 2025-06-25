@@ -57,7 +57,7 @@ if [[ "$version_type" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 else
     # Parse current version
     IFS='.' read -r major minor patch <<< "$current_version"
-    
+
     case $version_type in
         major)
             new_version="$((major + 1)).0.0"

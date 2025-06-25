@@ -8,21 +8,29 @@ use std::time::{Duration, Instant};
 pub enum PingResult {
     Success {
         rtt: Duration,
+        #[allow(dead_code)]
         sequence: u16,
+        #[allow(dead_code)]
         timestamp: Instant,
     },
     Timeout {
+        #[allow(dead_code)]
         sequence: u16,
+        #[allow(dead_code)]
         timestamp: Instant,
     },
     Error {
+        #[allow(dead_code)]
         error: String,
+        #[allow(dead_code)]
         sequence: u16,
+        #[allow(dead_code)]
         timestamp: Instant,
     },
 }
 
 impl PingResult {
+    #[allow(dead_code)]
     pub fn timestamp(&self) -> Instant {
         match self {
             PingResult::Success { timestamp, .. } => *timestamp,
@@ -31,6 +39,7 @@ impl PingResult {
         }
     }
 
+    #[allow(dead_code)]
     pub fn sequence(&self) -> u16 {
         match self {
             PingResult::Success { sequence, .. } => *sequence,
@@ -105,15 +114,12 @@ impl PingStats {
 
         let successful = recent_results.iter().filter(|r| r.is_success()).count();
         let total = recent_results.len();
-        
+
         ((total - successful) as f64 / total as f64) * 100.0
     }
 
     pub fn rtt_stats(&self) -> RttStats {
-        let rtts: Vec<Duration> = self.history
-            .iter()
-            .filter_map(|r| r.rtt())
-            .collect();
+        let rtts: Vec<Duration> = self.history.iter().filter_map(|r| r.rtt()).collect();
 
         if rtts.is_empty() {
             return RttStats::default();
@@ -124,7 +130,7 @@ impl PingStats {
 
         let min = *sorted_rtts.first().unwrap();
         let max = *sorted_rtts.last().unwrap();
-        
+
         let sum: Duration = rtts.iter().sum();
         let avg = sum / rtts.len() as u32;
 
@@ -142,8 +148,9 @@ impl PingStats {
                 let diff = rtt.as_secs_f64() - avg.as_secs_f64();
                 diff * diff
             })
-            .sum::<f64>() / rtts.len() as f64;
-        
+            .sum::<f64>()
+            / rtts.len() as f64;
+
         let jitter = Duration::from_secs_f64(variance.sqrt());
 
         RttStats {
@@ -169,10 +176,12 @@ impl PingStats {
         }
     }
 
+    #[allow(dead_code)]
     pub fn recent_results(&self, count: usize) -> Vec<&PingResult> {
         self.history.iter().rev().take(count).collect()
     }
 
+    #[allow(dead_code)]
     pub fn history(&self) -> &VecDeque<PingResult> {
         &self.history
     }
@@ -181,18 +190,22 @@ impl PingStats {
         self.total_pings
     }
 
+    #[allow(dead_code)]
     pub fn successful_pings(&self) -> u64 {
         self.successful_pings
     }
 
+    #[allow(dead_code)]
     pub fn timeouts(&self) -> u64 {
         self.timeouts
     }
 
+    #[allow(dead_code)]
     pub fn errors(&self) -> u64 {
         self.errors
     }
 
+    #[allow(dead_code)]
     pub fn rtt_history_for_graph(&self, points: usize) -> Vec<Option<f64>> {
         let total_points = self.history.len();
         if total_points == 0 {
@@ -206,10 +219,11 @@ impl PingStats {
         };
 
         let mut graph_points = Vec::with_capacity(points);
-        
+
         for i in (0..total_points).step_by(step).take(points) {
             if let Some(result) = self.history.get(i) {
-                graph_points.push(result.rtt().map(|rtt| rtt.as_secs_f64() * 1000.0)); // Convert to ms
+                graph_points.push(result.rtt().map(|rtt| rtt.as_secs_f64() * 1000.0));
+            // Convert to ms
             } else {
                 graph_points.push(None);
             }
@@ -226,10 +240,14 @@ impl PingStats {
 
 #[derive(Debug, Clone, Default)]
 pub struct RttStats {
+    #[allow(dead_code)]
     pub min: Duration,
+    #[allow(dead_code)]
     pub max: Duration,
     pub avg: Duration,
+    #[allow(dead_code)]
     pub median: Duration,
+    #[allow(dead_code)]
     pub jitter: Duration,
 }
 
@@ -241,6 +259,7 @@ pub enum ConnectionQuality {
 }
 
 impl ConnectionQuality {
+    #[allow(dead_code)]
     pub fn color(&self) -> &'static str {
         match self {
             ConnectionQuality::Good => "green",

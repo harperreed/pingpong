@@ -98,26 +98,26 @@ impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read config file: {}", path.as_ref().display()))?;
-        
+
         toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", path.as_ref().display()))
     }
-    
+
+    #[allow(dead_code)]
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let content = toml::to_string_pretty(self)
-            .context("Failed to serialize config")?;
-        
+        let content = toml::to_string_pretty(self).context("Failed to serialize config")?;
+
         fs::write(&path, content)
             .with_context(|| format!("Failed to write config file: {}", path.as_ref().display()))
     }
-    
+
     pub fn add_host(&mut self, address: String) {
         let name = if address.chars().all(|c| c.is_ascii_digit() || c == '.') {
             format!("IP {}", address)
         } else {
             address.clone()
         };
-        
+
         self.hosts.push(Host {
             name,
             address,
@@ -125,11 +125,11 @@ impl Config {
             interval: None,
         });
     }
-    
+
     pub fn set_interval(&mut self, interval: f64) {
         self.ping.interval = interval;
     }
-    
+
     pub fn enabled_hosts(&self) -> impl Iterator<Item = &Host> {
         self.hosts.iter().filter(|h| h.enabled)
     }

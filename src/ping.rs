@@ -14,10 +14,10 @@ use tokio::time;
 use crate::config::Host;
 use crate::stats::{PingResult, PingStats};
 
-
 #[derive(Debug, Clone)]
 pub struct PingEvent {
     pub host_id: String,
+    #[allow(dead_code)]
     pub host_name: String,
     pub result: PingResult,
 }
@@ -42,19 +42,20 @@ impl PingEngine {
         // Create ping clients and resolve hosts
         for host in &hosts {
             let host_id = Self::generate_host_id(&host.address);
-            
+
             // Resolve hostname if needed (we don't need to store the IP here as we resolve it again in the ping loop)
             let _ip_addr = if let Ok(ip) = host.address.parse::<IpAddr>() {
                 ip
             } else {
-                Self::resolve_hostname(&host.address).await
+                Self::resolve_hostname(&host.address)
+                    .await
                     .with_context(|| format!("Failed to resolve hostname: {}", host.address))?
             };
 
             // Create ping client
             let config = SurgePingConfig::default();
             let client = Client::new(&config)?;
-            
+
             clients.insert(host_id.clone(), Arc::new(client));
             stats.insert(host_id, PingStats::new(ping_config.history_size));
         }
@@ -110,7 +111,7 @@ impl PingEngine {
         let host_id = Self::generate_host_id(&host.address);
         let interval = Duration::from_secs_f64(host.interval.unwrap_or(ping_config.interval));
         let timeout = Duration::from_secs_f64(ping_config.timeout);
-        
+
         // Resolve IP address
         let ip_addr = match Self::resolve_hostname(&host.address).await {
             Ok(ip) => ip,
@@ -133,11 +134,8 @@ impl PingEngine {
             let result = {
                 let mut pinger = client.pinger(ip_addr, identifier).await;
                 pinger.timeout(timeout);
-                
-                match tokio::time::timeout(
-                    timeout,
-                    pinger.ping(seq_cnt, &[])
-                ).await {
+
+                match tokio::time::timeout(timeout, pinger.ping(seq_cnt, &[])).await {
                     Ok(Ok((_, duration))) => PingResult::Success {
                         rtt: duration,
                         sequence,
@@ -186,9 +184,9 @@ impl PingEngine {
         }
 
         // Resolve hostname
-        let ips = lookup_host(hostname)
-            .with_context(|| format!("DNS lookup failed for {}", hostname))?;
-        
+        let ips =
+            lookup_host(hostname).with_context(|| format!("DNS lookup failed for {}", hostname))?;
+
         ips.into_iter()
             .next()
             .with_context(|| format!("No IP addresses found for {}", hostname))
@@ -196,9 +194,13 @@ impl PingEngine {
 
     fn generate_host_id(address: &str) -> String {
         // Use a deterministic ID based on address for consistency
-        format!("host_{}", uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, address.as_bytes()))
+        format!(
+            "host_{}",
+            uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, address.as_bytes())
+        )
     }
 
+    #[allow(dead_code)]
     pub async fn get_stats(&self) -> HashMap<String, PingStats> {
         self.stats.read().await.clone()
     }
@@ -220,23 +222,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_ping_engine_creation() {
-        let hosts = vec![
-            Host {
-                name: "localhost".to_string(),
-                address: "127.0.0.1".to_string(),
-                enabled: true,
-                interval: None,
-            }
-        ];
-        
+        let hosts = vec![Host {
+            name: "localhost".to_string(),
+            address: "127.0.0.1".to_string(),
+            enabled: true,
+            interval: None,
+        }];
+
         let ping_config = PingConfig {
             interval: 1.0,
             timeout: 5.0,
             history_size: 100,
+            packet_size: 64,
         };
-        
+
         let (tx, _rx) = mpsc::unbounded_channel();
-        
+
         let result = PingEngine::new(hosts, ping_config, tx).await;
         assert!(result.is_ok(), "PingEngine creation should succeed");
     }
@@ -245,7 +246,7 @@ mod tests {
     async fn test_hostname_resolution() {
         let result = PingEngine::resolve_hostname("127.0.0.1").await;
         assert!(result.is_ok(), "Should resolve localhost IP");
-        
+
         let result = PingEngine::resolve_hostname("localhost").await;
         assert!(result.is_ok(), "Should resolve localhost hostname");
     }
@@ -255,8 +256,11 @@ mod tests {
         let id1 = PingEngine::generate_host_id("127.0.0.1");
         let id2 = PingEngine::generate_host_id("127.0.0.1");
         let id3 = PingEngine::generate_host_id("8.8.8.8");
-        
+
         assert_eq!(id1, id2, "Same address should generate same ID");
-        assert_ne!(id1, id3, "Different addresses should generate different IDs");
+        assert_ne!(
+            id1, id3,
+            "Different addresses should generate different IDs"
+        );
     }
 }

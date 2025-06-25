@@ -12,7 +12,7 @@ Pingpong is a Rust-based TUI (Terminal User Interface) ping utility for monitori
 - **main.rs**: Entry point handling CLI args and configuration loading
 - **app.rs**: Main application orchestrator coordinating the ping engine and TUI event loop
 - **ping.rs**: Asynchronous ping engine with per-host ICMP operations and DNS resolution
-- **tui.rs**: Terminal UI rendering with ratatui for graphs, tables, and real-time updates  
+- **tui.rs**: Terminal UI rendering with ratatui for graphs, tables, and real-time updates
 - **stats.rs**: Statistics collection with circular buffers and real-time metrics calculation
 - **config.rs**: TOML configuration management for hosts, ping settings, and UI preferences
 
@@ -38,7 +38,7 @@ cargo build --release
 cargo run -- --config pingpong.toml
 cargo run -- --host 8.8.8.8 --host google.com --interval 0.5
 cargo run -- --animation plasma    # Force plasma animation
-cargo run -- --animation globe     # Force globe animation  
+cargo run -- --animation globe     # Force globe animation
 cargo run -- --animation bounce    # Force bouncing RTT animation
 ```
 
@@ -59,7 +59,7 @@ cargo fmt            # Code formatting
 
 The application uses TOML configuration files (default: `pingpong.toml`):
 - **ping**: interval, timeout, history_size, packet_size
-- **ui**: refresh_rate, theme, show_details, graph_height  
+- **ui**: refresh_rate, theme, show_details, graph_height
 - **hosts**: array of {name, address, enabled, interval?}
 
 CLI arguments override config file settings.
@@ -77,7 +77,7 @@ Use `--animation <type>` to force a specific mode, otherwise random selection oc
 Key dependencies and their purposes:
 - **ratatui + crossterm**: TUI framework and terminal handling
 - **tokio**: Async runtime for concurrent ping operations
-- **surge-ping**: ICMP ping implementation 
+- **surge-ping**: ICMP ping implementation
 - **dns-lookup**: Hostname resolution
 - **serde + toml**: Configuration serialization
 - **clap**: CLI argument parsing
