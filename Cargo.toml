@@ -1,5 +1,5 @@
 [package]
-name = "pingpong"
+name = "pingpong-rs"
 version = "0.1.5"
 edition = "2021"
 description = "A Rust-based TUI ping utility for monitoring network connectivity to multiple hosts simultaneously"
