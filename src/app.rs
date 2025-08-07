@@ -70,6 +70,13 @@ impl App {
                 event = self.event_rx.recv() => {
                     if let Some(ping_event) = event {
                         self.handle_ping_event(ping_event).await;
+
+                        // Redraw the TUI immediately after handling a ping event
+                        let stats = self.stats.read().await;
+                        if let Err(e) = self.tui.draw(&stats).await {
+                            eprintln!("TUI error: {}", e);
+                            break;
+                        }
                     }
                 }
 
