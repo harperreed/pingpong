@@ -29,10 +29,18 @@ use crate::status::HostState;
 pub fn terminal_enter() -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    write!(stdout, "\x1b[22;2t")?;
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-    stdout.flush()?;
-    Ok(())
+    // If any setup step fails after raw mode is on, roll the terminal back
+    // (terminal_leave is idempotent) so we never leave the user in raw mode.
+    let res: anyhow::Result<()> = (|| {
+        write!(stdout, "\x1b[22;2t")?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        stdout.flush()?;
+        Ok(())
+    })();
+    if res.is_err() {
+        terminal_leave();
+    }
+    res
 }
 
 /// Restore the terminal: leave alt screen, disable raw mode, restore title, show cursor.
