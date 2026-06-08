@@ -6,7 +6,9 @@ use chrono_tz::US::Central;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
+    },
 };
 use ratatui::{
     backend::CrosstermBackend,
@@ -284,6 +286,11 @@ impl TuiApp {
 
     pub fn show_details(&self) -> bool {
         self.state.show_details
+    }
+
+    /// Sets the terminal window/tab title to the live connectivity summary.
+    pub fn set_title(&mut self, title: &str) {
+        let _ = execute!(io::stdout(), SetTitle(title));
     }
 
     pub async fn draw(

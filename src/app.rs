@@ -117,6 +117,8 @@ impl App {
                         .collect();
                     let states: Vec<HostState> = host_states.iter().map(|(_, s)| s.clone()).collect();
                     let conn = status::connectivity(&states, &self.portal);
+                    let agg = status::aggregate(&states);
+                    self.tui.set_title(&status::title(&conn, &agg));
                     let banner = match &conn {
                         ConnectivityState::CaptivePortal { url } => {
                             Some(format!("\u{26a0}  Captive portal detected \u{2014} open {url}"))
