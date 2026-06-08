@@ -288,8 +288,8 @@ impl TuiApp {
         self.state.show_details
     }
 
-    /// Sets the terminal window/tab title to the live connectivity summary.
-    pub fn set_title(&mut self, title: &str) {
+    /// Sets the terminal window/tab title.
+    pub fn set_title(&self, title: &str) {
         let _ = execute!(io::stdout(), SetTitle(title));
     }
 
