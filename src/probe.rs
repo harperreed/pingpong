@@ -1,8 +1,9 @@
 // ABOUTME: Captive-portal connectivity probe over plain HTTP.
 // ABOUTME: Classifies the network as Online, CaptivePortal, or Offline.
 
-// `probe_once` runs from a spawned task; the URL carried by `CaptivePortal` is read by the
-// connectivity banner renderer (via `App.portal`), so the compiler reports it dead in this module.
+// `probe_once` runs from a spawned task, and the `url` carried by `CaptivePortal` is read
+// through `App.portal` by the TUI connectivity banner — another module. A binary crate can't
+// see those cross-module uses, so the field reads as dead here; suppress it module-wide.
 #![allow(dead_code)]
 
 use std::time::Duration;
@@ -55,7 +56,8 @@ pub async fn probe_once(url: &str) -> ProbeResult {
         );
         stream.write_all(req.as_bytes()).await.ok()?;
         let mut buf = Vec::new();
-        // Cap the read so a portal that streams a big login page can't hang us.
+        // Cap the read so a portal serving a huge page can't exhaust memory;
+        // the 5s timeout below guards against a server that never closes.
         let mut limited = stream.take(8192);
         limited.read_to_end(&mut buf).await.ok()?;
         let text = String::from_utf8_lossy(&buf);
@@ -96,6 +98,11 @@ mod tests {
             classify(200, false, "u"),
             ProbeResult::CaptivePortal { url: "u".into() }
         );
+    }
+
+    #[test]
+    fn classify_offline_on_server_error() {
+        assert_eq!(classify(500, false, "u"), ProbeResult::Offline);
     }
 
     #[test]
