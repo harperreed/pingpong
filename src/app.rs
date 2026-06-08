@@ -18,17 +18,17 @@ pub struct App {
     config: Config,
     tui: TuiApp,
     stats: HashMap<String, PingStats>,
-    // Per-host resolution flag; read by the connectivity status renderer once wired in.
+    // Per-host DNS resolution state, keyed by host id; read by the connectivity status renderer.
     #[allow(dead_code)]
     resolved: HashMap<String, bool>,
-    // Per-host last resolution error; read by the renderer once the error banner is wired in.
+    // Per-host last resolution error (None once resolved), keyed by host id; read by the error banner.
     #[allow(dead_code)]
     resolve_err: HashMap<String, Option<String>>,
-    // Network connectivity classification; read by the renderer once the banner is wired in.
+    // Latest captive-portal/connectivity classification from the probe; read by the connectivity banner.
     #[allow(dead_code)]
     portal: ProbeResult,
     event_rx: mpsc::Receiver<PingEvent>,
-    // Host name/id pairs exposed to the TUI title row; read by the renderer.
+    // (host_id, display name) pairs identifying each monitored host; used to label host rows.
     #[allow(dead_code)]
     host_info: Vec<(String, String)>,
 }
@@ -78,7 +78,7 @@ impl App {
                 // Handle ping events
                 event = self.event_rx.recv() => {
                     if let Some(ping_event) = event {
-                        self.handle_ping_event(ping_event).await;
+                        self.handle_ping_event(ping_event);
                     }
                 }
 
@@ -99,7 +99,7 @@ impl App {
         Ok(())
     }
 
-    async fn handle_ping_event(&mut self, event: PingEvent) {
+    fn handle_ping_event(&mut self, event: PingEvent) {
         match event.update {
             HostUpdate::Resolving => {
                 self.resolved.insert(event.host_id.clone(), false);
