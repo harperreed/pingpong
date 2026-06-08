@@ -5,6 +5,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::signal;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time;
 
@@ -76,17 +77,16 @@ impl App {
                 // Update UI
                 _ = ui_update_interval.tick() => {
                     let stats = self.stats.read().await;
-                    if let Err(e) = self.tui.draw(&stats).await {
-                        eprintln!("TUI error: {}", e);
+                    self.tui.draw(&stats).await?;
+                    drop(stats);
+                    if self.tui.handle_events().await? {
                         break;
                     }
+                }
 
-                    // Handle user input
-                    if let Ok(should_quit) = self.tui.handle_events().await {
-                        if should_quit {
-                            break;
-                        }
-                    }
+                // Ctrl-C signal path for pre-/non-raw-mode window
+                _ = signal::ctrl_c() => {
+                    break;
                 }
             }
         }

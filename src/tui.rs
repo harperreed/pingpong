@@ -4,7 +4,7 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
 use chrono_tz::US::Central;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -246,6 +246,10 @@ impl TuiApp {
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(true); // Ctrl-C quits (raw mode swallows SIGINT)
+                    }
+                    KeyCode::Esc => return Ok(true),
                     KeyCode::Char('q') => return Ok(true), // Quit
                     KeyCode::Char('h') | KeyCode::F(1) => {
                         self.state.show_help = !self.state.show_help;
