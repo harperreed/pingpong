@@ -17,9 +17,31 @@ use ratatui::{
 };
 use std::collections::HashMap;
 use std::io;
+use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use crate::stats::PingStats;
+
+/// Put the terminal into TUI mode: raw mode, alternate screen, save title.
+pub fn terminal_enter() -> anyhow::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    write!(stdout, "\x1b[22;2t")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+/// Restore the terminal: leave alt screen, disable raw mode, restore title, show cursor.
+/// Safe to call multiple times; all errors are ignored so it can run from a panic hook.
+pub fn terminal_leave() {
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+    let _ = disable_raw_mode();
+    let _ = write!(stdout, "\x1b[23;2t");
+    let _ = execute!(stdout, crossterm::cursor::Show);
+    let _ = stdout.flush();
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationType {
@@ -70,9 +92,6 @@ pub struct TuiState {
 
 impl TuiState {
     pub fn with_animation(animation_type: AnimationType) -> Self {
-        // Debug: Log which animation was selected
-        eprintln!("🎨 Selected animation: {:?}", animation_type);
-
         let (bounce_dx, bounce_dy) = match animation_type {
             AnimationType::BouncingLogo => (1.5, 1.2), // Initial velocity
             _ => (0.0, 0.0),
@@ -143,11 +162,8 @@ pub struct TuiApp {
 
 impl TuiApp {
     pub async fn new(animation_type: Option<AnimationType>) -> anyhow::Result<Self> {
-        // Setup terminal
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
+        terminal_enter()?;
+        let backend = CrosstermBackend::new(io::stdout());
         let terminal = Terminal::new(backend)?;
 
         let state = if let Some(anim_type) = animation_type {
@@ -1681,12 +1697,6 @@ fn render_status_bar(
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        let _ = self.terminal.show_cursor();
+        terminal_leave();
     }
 }

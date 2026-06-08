@@ -60,6 +60,12 @@ struct Cli {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        tui::terminal_leave();
+        default_hook(info);
+    }));
+
     let cli = Cli::parse();
 
     // Load configuration
