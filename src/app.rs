@@ -127,7 +127,7 @@ impl App {
                         _ => None,
                     };
                     let opts = crate::tui::RenderOpts {
-                        theme: crate::tui::Theme::from_name(&self.tui.theme_name()),
+                        theme: crate::tui::Theme::from_name(self.tui.theme_name()),
                         show_details: self.tui.show_details(),
                         graph_height: self.config.ui.graph_height,
                         banner,

@@ -21,6 +21,7 @@ use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use crate::stats::PingStats;
+use crate::status::HostState;
 
 /// Put the terminal into TUI mode: raw mode, alternate screen, save title.
 pub fn terminal_enter() -> anyhow::Result<()> {
@@ -77,7 +78,7 @@ impl AnimationType {
 // Color palette the renderer applies to status text and graphs.
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
-    // fg is part of the palette for completeness; not read by the current renderer.
+    // fg is part of the palette; unused by the renderer.
     #[allow(dead_code)]
     pub fg: Color,
     pub accent: Color,
@@ -145,7 +146,7 @@ pub struct RenderOpts {
     pub show_details: bool,
     pub graph_height: u16,
     pub banner: Option<String>, // connectivity banner text (portal/offline)
-    pub host_states: Vec<(String, crate::status::HostState)>, // (host_id, state)
+    pub host_states: Vec<(String, HostState)>, // (host_id, state)
 }
 
 pub struct TuiState {
@@ -277,8 +278,8 @@ impl TuiApp {
         self.state.graph_height = graph_height;
     }
 
-    pub fn theme_name(&self) -> String {
-        self.state.theme_name.clone()
+    pub fn theme_name(&self) -> &str {
+        &self.state.theme_name
     }
 
     pub fn show_details(&self) -> bool {
@@ -521,7 +522,7 @@ fn render_pings_window(
     } else {
         0
     };
-    let per_host = 2 + graph_h;
+    let per_host = 2u16.saturating_add(graph_h);
     let constraints: Vec<Constraint> = host_info
         .iter()
         .map(|_| Constraint::Length(per_host))
@@ -538,13 +539,13 @@ fn render_pings_window(
             .find(|(id, _)| id == host_id)
             .map(|(_, s)| s.clone());
         let (symbol, color, detail) = match &state {
-            Some(crate::status::HostState::Up { rtt_ms }) => {
+            Some(HostState::Up { rtt_ms }) => {
                 ("\u{25cf}", opts.theme.good, format!("{rtt_ms:.0}ms"))
             }
-            Some(crate::status::HostState::Degraded { loss_pct }) => {
+            Some(HostState::Degraded { loss_pct }) => {
                 ("\u{25d0}", opts.theme.warn, format!("{loss_pct:.0}% loss"))
             }
-            Some(crate::status::HostState::Down { reason }) => {
+            Some(HostState::Down { reason }) => {
                 ("\u{2717}", opts.theme.bad, format!("down: {reason}"))
             }
             _ => ("\u{25cb}", opts.theme.dim, "resolving\u{2026}".to_string()),
