@@ -150,6 +150,17 @@ impl Config {
         if self.ui.refresh_rate == 0 {
             self.ui.refresh_rate = 100;
         }
+        // Per-host interval overrides feed Duration::from_secs_f64 in the ping loop;
+        // drop any that are non-finite or too small so they fall back to the global interval.
+        for host in &mut self.hosts {
+            if host.interval.is_some_and(|i| !i.is_finite() || i < 0.1) {
+                host.interval = None;
+            }
+        }
+        // Keep the graph height within a sane range of terminal rows.
+        if self.ui.graph_height == 0 || self.ui.graph_height > 50 {
+            self.ui.graph_height = 10;
+        }
     }
 
     pub fn set_interval(&mut self, interval: f64) {
@@ -223,5 +234,82 @@ mod tests {
         c.validate();
         assert!(c.ping.interval.is_finite() && c.ping.interval >= 0.1);
         assert!(c.ping.timeout.is_finite() && c.ping.timeout >= 0.1);
+    }
+
+    #[test]
+    fn validate_drops_bad_per_host_intervals() {
+        let mut c = Config {
+            hosts: vec![
+                Host {
+                    name: "nan".into(),
+                    address: "1.1.1.1".into(),
+                    enabled: true,
+                    interval: Some(f64::NAN),
+                },
+                Host {
+                    name: "inf".into(),
+                    address: "8.8.8.8".into(),
+                    enabled: true,
+                    interval: Some(f64::INFINITY),
+                },
+                Host {
+                    name: "tiny".into(),
+                    address: "9.9.9.9".into(),
+                    enabled: true,
+                    interval: Some(0.0),
+                },
+                Host {
+                    name: "ok".into(),
+                    address: "google.com".into(),
+                    enabled: true,
+                    interval: Some(2.0),
+                },
+                Host {
+                    name: "none".into(),
+                    address: "1.0.0.1".into(),
+                    enabled: true,
+                    interval: None,
+                },
+            ],
+            ..Config::default()
+        };
+        c.validate();
+        assert_eq!(
+            c.hosts[0].interval, None,
+            "NaN per-host interval must be dropped"
+        );
+        assert_eq!(
+            c.hosts[1].interval, None,
+            "infinite per-host interval must be dropped"
+        );
+        assert_eq!(
+            c.hosts[2].interval, None,
+            "too-small per-host interval must be dropped"
+        );
+        assert_eq!(
+            c.hosts[3].interval,
+            Some(2.0),
+            "valid per-host interval must be kept"
+        );
+        assert_eq!(c.hosts[4].interval, None, "absent interval stays absent");
+    }
+
+    #[test]
+    fn validate_clamps_graph_height() {
+        let mut c = Config::default();
+        c.ui.graph_height = 0;
+        c.validate();
+        assert_eq!(c.ui.graph_height, 10, "zero graph height clamps to default");
+
+        c.ui.graph_height = 9999;
+        c.validate();
+        assert_eq!(
+            c.ui.graph_height, 10,
+            "absurd graph height clamps to default"
+        );
+
+        c.ui.graph_height = 20;
+        c.validate();
+        assert_eq!(c.ui.graph_height, 20, "in-range graph height is preserved");
     }
 }
