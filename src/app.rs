@@ -153,6 +153,9 @@ impl App {
         match event.update {
             HostUpdate::Resolving => {
                 self.resolved.insert(event.host_id.clone(), false);
+                // Entering a new resolve cycle: clear any prior error so the host shows
+                // "resolving" rather than a stale "down: dns" until this attempt resolves.
+                self.resolve_err.insert(event.host_id.clone(), None);
             }
             HostUpdate::ResolveFailed(e) => {
                 self.resolved.insert(event.host_id.clone(), false);
