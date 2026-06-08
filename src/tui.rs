@@ -164,7 +164,7 @@ impl TuiApp {
     pub async fn new(animation_type: Option<AnimationType>) -> anyhow::Result<Self> {
         terminal_enter()?;
         let backend = CrosstermBackend::new(io::stdout());
-        let terminal = Terminal::new(backend)?;
+        let terminal = Terminal::new(backend).inspect_err(|_| terminal_leave())?;
 
         let state = if let Some(anim_type) = animation_type {
             TuiState::with_animation(anim_type)
