@@ -74,6 +74,83 @@ impl AnimationType {
     }
 }
 
+// Color palette the renderer applies to status text and graphs.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub struct Theme {
+    pub fg: Color,
+    pub accent: Color,
+    pub good: Color,
+    pub warn: Color,
+    pub bad: Color,
+    pub dim: Color,
+}
+
+impl Theme {
+    // Returns the standard dark-background palette.
+    #[allow(dead_code)]
+    pub fn dark() -> Self {
+        Self {
+            fg: Color::Green,
+            accent: Color::Cyan,
+            good: Color::Green,
+            warn: Color::Yellow,
+            bad: Color::Red,
+            dim: Color::DarkGray,
+        }
+    }
+    // Returns the standard light-background palette.
+    #[allow(dead_code)]
+    pub fn light() -> Self {
+        Self {
+            fg: Color::Black,
+            accent: Color::Blue,
+            good: Color::Green,
+            warn: Color::Rgb(180, 120, 0),
+            bad: Color::Red,
+            dim: Color::Gray,
+        }
+    }
+    // Resolves a config theme name (dark/light/auto) into a concrete palette.
+    #[allow(dead_code)]
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "light" => Self::light(),
+            "dark" => Self::dark(),
+            _ => {
+                // auto: COLORFGBG like "15;0" => light bg (last field high) -> light theme
+                match std::env::var("COLORFGBG")
+                    .ok()
+                    .and_then(|v| v.rsplit(';').next().map(|s| s.to_string()))
+                {
+                    Some(bg) if bg.trim().parse::<u8>().map(|n| n >= 7).unwrap_or(false) => {
+                        Self::light()
+                    }
+                    _ => Self::dark(),
+                }
+            }
+        }
+    }
+    // Cycles through dark → light → auto and wraps back to dark.
+    pub fn cycle_name(name: &str) -> &'static str {
+        match name {
+            "dark" => "light",
+            "light" => "auto",
+            _ => "dark",
+        }
+    }
+}
+
+// Per-frame render inputs the main view reads: palette, detail toggle, graph height, banner, and per-host states.
+#[allow(dead_code)]
+pub struct RenderOpts {
+    pub theme: Theme,
+    pub show_details: bool,
+    pub graph_height: u16,
+    pub banner: Option<String>, // connectivity banner text (portal/offline)
+    pub host_states: Vec<(String, crate::status::HostState)>, // (host_id, state)
+}
+
 pub struct TuiState {
     #[allow(dead_code)]
     pub selected_tab: usize,
@@ -93,6 +170,11 @@ pub struct TuiState {
     pub chicago_time: DateTime<chrono_tz::Tz>,
     pub use_24_hour_format: bool,
     pub show_lore: bool,
+    pub theme_name: String,
+    pub show_details: bool,
+    // Height in rows of the per-host latency graph, read by the renderer.
+    #[allow(dead_code)]
+    pub graph_height: u16,
 }
 
 impl TuiState {
@@ -123,6 +205,9 @@ impl TuiState {
             chicago_time: chicago_now,
             use_24_hour_format: true,
             show_lore: true,
+            theme_name: "auto".into(),
+            show_details: true,
+            graph_height: 10,
         }
     }
 
@@ -186,6 +271,14 @@ impl TuiApp {
 
     pub fn set_host_info(&mut self, host_info: Vec<(String, String)>) {
         self.host_info = host_info;
+    }
+
+    // Pushes theme/detail/graph-height settings from app config into render state.
+    #[allow(dead_code)]
+    pub fn set_ui_config(&mut self, theme_name: String, show_details: bool, graph_height: u16) {
+        self.state.theme_name = theme_name;
+        self.state.show_details = show_details;
+        self.state.graph_height = graph_height;
     }
 
     pub async fn draw(&mut self, stats: &HashMap<String, PingStats>) -> anyhow::Result<()> {
@@ -265,6 +358,13 @@ impl TuiApp {
                     }
                     KeyCode::Char('l') => {
                         self.state.toggle_lore_visibility();
+                    }
+                    KeyCode::Char('t') => {
+                        let next = Theme::cycle_name(&self.state.theme_name).to_string();
+                        self.state.theme_name = next;
+                    }
+                    KeyCode::Char('d') => {
+                        self.state.show_details = !self.state.show_details;
                     }
                     _ => {}
                 }
@@ -1713,5 +1813,16 @@ fn render_status_bar(
 impl Drop for TuiApp {
     fn drop(&mut self) {
         terminal_leave();
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    #[test]
+    fn cycle_wraps() {
+        assert_eq!(Theme::cycle_name("dark"), "light");
+        assert_eq!(Theme::cycle_name("light"), "auto");
+        assert_eq!(Theme::cycle_name("auto"), "dark");
     }
 }
