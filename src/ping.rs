@@ -22,6 +22,36 @@ pub struct PingEvent {
     pub result: PingResult,
 }
 
+/// Exponential backoff with a cap. `next()` returns the current delay then doubles it.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct Backoff {
+    current: Duration,
+    base: Duration,
+    max: Duration,
+}
+
+#[allow(dead_code)]
+impl Backoff {
+    pub fn new(base: Duration, max: Duration) -> Self {
+        Self {
+            current: base,
+            base,
+            max,
+        }
+    }
+    // Intentional inherent next(): Backoff is a delay sequence, not an Iterator (no Option/associated Item).
+    #[allow(clippy::should_implement_trait)]
+    pub fn next(&mut self) -> Duration {
+        let delay = self.current.min(self.max);
+        self.current = (self.current * 2).min(self.max);
+        delay
+    }
+    pub fn reset(&mut self) {
+        self.current = self.base;
+    }
+}
+
 pub struct PingEngine {
     hosts: Vec<Host>,
     clients: HashMap<String, Arc<Client>>,
@@ -262,5 +292,19 @@ mod tests {
             id1, id3,
             "Different addresses should generate different IDs"
         );
+    }
+
+    #[test]
+    fn backoff_doubles_and_caps_and_resets() {
+        let mut b = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
+        assert_eq!(b.next(), Duration::from_secs(1));
+        assert_eq!(b.next(), Duration::from_secs(2));
+        assert_eq!(b.next(), Duration::from_secs(4));
+        assert_eq!(b.next(), Duration::from_secs(8));
+        assert_eq!(b.next(), Duration::from_secs(16));
+        assert_eq!(b.next(), Duration::from_secs(30)); // capped (would be 32)
+        assert_eq!(b.next(), Duration::from_secs(30)); // stays capped
+        b.reset();
+        assert_eq!(b.next(), Duration::from_secs(1));
     }
 }
