@@ -276,3 +276,117 @@ impl ConnectionQuality {
         }
     }
 }
+
+#[cfg(test)]
+mod stats_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    fn success(ms: u64) -> PingResult {
+        PingResult::Success {
+            rtt: Duration::from_millis(ms),
+            sequence: 0,
+            timestamp: Instant::now(),
+        }
+    }
+
+    fn timeout() -> PingResult {
+        PingResult::Timeout {
+            sequence: 0,
+            timestamp: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn empty_stats_are_zero() {
+        let s = PingStats::new(100);
+        assert_eq!(s.total_pings(), 0);
+        assert_eq!(s.packet_loss_percent(), 0.0);
+        let r = s.rtt_stats();
+        assert_eq!(r.avg, Duration::ZERO);
+    }
+
+    #[test]
+    fn packet_loss_counts_timeouts_and_errors() {
+        let mut s = PingStats::new(100);
+        s.add_result(&success(10));
+        s.add_result(&success(10));
+        s.add_result(&timeout());
+        s.add_result(&timeout());
+        assert_eq!(s.total_pings(), 4);
+        assert!((s.packet_loss_percent() - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn recent_loss_uses_only_window() {
+        let mut s = PingStats::new(100);
+        for _ in 0..10 {
+            s.add_result(&success(10));
+        }
+        for _ in 0..2 {
+            s.add_result(&timeout());
+        }
+        // window of 2 = the two most recent, both timeouts = 100%
+        assert!((s.packet_loss_percent_recent(2) - 100.0).abs() < 1e-9);
+        // window of 12 = 2/12 lost
+        assert!((s.packet_loss_percent_recent(12) - (2.0 / 12.0 * 100.0)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn rtt_min_max_avg_median_odd() {
+        let mut s = PingStats::new(100);
+        for ms in [10u64, 20, 30] {
+            s.add_result(&success(ms));
+        }
+        let r = s.rtt_stats();
+        assert_eq!(r.min, Duration::from_millis(10));
+        assert_eq!(r.max, Duration::from_millis(30));
+        assert_eq!(r.avg, Duration::from_millis(20));
+        assert_eq!(r.median, Duration::from_millis(20));
+    }
+
+    #[test]
+    fn rtt_median_even() {
+        let mut s = PingStats::new(100);
+        for ms in [10u64, 20, 30, 40] {
+            s.add_result(&success(ms));
+        }
+        // even count -> mean of the two middle values (20, 30) = 25
+        assert_eq!(s.rtt_stats().median, Duration::from_millis(25));
+    }
+
+    #[test]
+    fn jitter_zero_for_constant_rtt() {
+        let mut s = PingStats::new(100);
+        for _ in 0..5 {
+            s.add_result(&success(42));
+        }
+        assert!(s.rtt_stats().jitter < Duration::from_micros(50));
+    }
+
+    #[test]
+    fn quality_thresholds() {
+        let mut good = PingStats::new(100);
+        for _ in 0..20 {
+            good.add_result(&success(10));
+        }
+        assert_eq!(good.connection_quality(), ConnectionQuality::Good);
+
+        let mut poor = PingStats::new(100);
+        for _ in 0..20 {
+            poor.add_result(&timeout());
+        }
+        assert_eq!(poor.connection_quality(), ConnectionQuality::Poor);
+    }
+
+    #[test]
+    fn history_is_bounded() {
+        let mut s = PingStats::new(3);
+        for ms in [1u64, 2, 3, 4, 5] {
+            s.add_result(&success(ms));
+        }
+        // Buffer caps at 3, so the oldest (1, 2) are dropped: min over {3,4,5} is 3.
+        assert_eq!(s.rtt_stats().min, Duration::from_millis(3));
+        assert_eq!(s.total_pings(), 5); // cumulative counter is unaffected by the cap
+    }
+}
