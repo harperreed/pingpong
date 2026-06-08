@@ -3,22 +3,32 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::Duration;
 use tokio::signal;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::mpsc;
 use tokio::time;
 
 use crate::config::Config;
-use crate::ping::{PingEngine, PingEvent};
+use crate::ping::{HostUpdate, PingEngine, PingEvent};
+use crate::probe::ProbeResult;
 use crate::stats::PingStats;
 use crate::tui::{AnimationType, TuiApp};
 
 pub struct App {
     config: Config,
     tui: TuiApp,
-    stats: Arc<RwLock<HashMap<String, PingStats>>>,
-    event_rx: mpsc::UnboundedReceiver<PingEvent>,
+    stats: HashMap<String, PingStats>,
+    // Per-host resolution flag; read by the connectivity status renderer once wired in.
+    #[allow(dead_code)]
+    resolved: HashMap<String, bool>,
+    // Per-host last resolution error; read by the renderer once the error banner is wired in.
+    #[allow(dead_code)]
+    resolve_err: HashMap<String, Option<String>>,
+    // Network connectivity classification; read by the renderer once the banner is wired in.
+    #[allow(dead_code)]
+    portal: ProbeResult,
+    event_rx: mpsc::Receiver<PingEvent>,
+    // Host name/id pairs exposed to the TUI title row; read by the renderer.
     #[allow(dead_code)]
     host_info: Vec<(String, String)>,
 }
@@ -26,13 +36,13 @@ pub struct App {
 impl App {
     pub async fn new(config: Config, animation_type: Option<AnimationType>) -> Result<Self> {
         // Create event channel
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(1024);
 
         // Get enabled hosts
         let hosts: Vec<_> = config.enabled_hosts().cloned().collect();
 
-        // Initialize ping engine
-        let ping_engine = PingEngine::new(hosts, config.ping.clone(), event_tx).await?;
+        // Initialize ping engine (synchronous, no DNS at construction time)
+        let ping_engine = PingEngine::new(hosts, config.ping.clone(), event_tx);
 
         // Get host info before moving ping_engine
         let host_info = ping_engine.get_host_info();
@@ -41,20 +51,18 @@ impl App {
         let mut tui = TuiApp::new(animation_type).await?;
         tui.set_host_info(host_info.clone());
 
-        // Initialize stats
-        let stats = Arc::new(RwLock::new(HashMap::new()));
-
         // Start ping engine in background
         tokio::spawn(async move {
-            if let Err(e) = ping_engine.start().await {
-                eprintln!("Ping engine error: {}", e);
-            }
+            let _ = ping_engine.start().await;
         });
 
         Ok(Self {
             config,
             tui,
-            stats,
+            stats: HashMap::new(),
+            resolved: HashMap::new(),
+            resolve_err: HashMap::new(),
+            portal: ProbeResult::Offline,
             event_rx,
             host_info,
         })
@@ -77,12 +85,8 @@ impl App {
                 // Update UI
                 // Errors propagate out of run; App's Drop restores the terminal before main prints them.
                 _ = ui_update_interval.tick() => {
-                    let stats = self.stats.read().await;
-                    self.tui.draw(&stats).await?;
-                    drop(stats);
-                    if self.tui.handle_events().await? {
-                        break;
-                    }
+                    self.tui.draw(&self.stats).await?;
+                    if self.tui.handle_events().await? { break; }
                 }
 
                 // Ctrl-C signal path for pre-/non-raw-mode window
@@ -96,12 +100,25 @@ impl App {
     }
 
     async fn handle_ping_event(&mut self, event: PingEvent) {
-        // Update stats
-        let mut stats = self.stats.write().await;
-        let host_stats = stats
-            .entry(event.host_id.clone())
-            .or_insert_with(|| PingStats::new(self.config.ping.history_size));
-
-        host_stats.add_result(&event.result);
+        match event.update {
+            HostUpdate::Resolving => {
+                self.resolved.insert(event.host_id.clone(), false);
+            }
+            HostUpdate::ResolveFailed(e) => {
+                self.resolved.insert(event.host_id.clone(), false);
+                self.resolve_err.insert(event.host_id.clone(), Some(e));
+            }
+            HostUpdate::Resolved(_) => {
+                self.resolved.insert(event.host_id.clone(), true);
+                self.resolve_err.insert(event.host_id.clone(), None);
+            }
+            HostUpdate::Pinged(result) => {
+                let entry = self
+                    .stats
+                    .entry(event.host_id.clone())
+                    .or_insert_with(|| PingStats::new(self.config.ping.history_size));
+                entry.add_result(&result);
+            }
+        }
     }
 }

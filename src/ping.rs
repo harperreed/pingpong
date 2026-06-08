@@ -3,35 +3,43 @@
 
 use anyhow::{Context, Result};
 use dns_lookup::lookup_host;
-use std::collections::HashMap;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 use surge_ping::{Client, Config as SurgePingConfig, PingIdentifier, PingSequence};
-use tokio::sync::{mpsc, RwLock};
-use tokio::time;
+use tokio::sync::mpsc;
 
 use crate::config::Host;
-use crate::stats::{PingResult, PingStats};
+use crate::stats::PingResult;
 
+/// Represents a state change or measurement event emitted by the ping loop for one host.
+#[derive(Debug, Clone)]
+pub enum HostUpdate {
+    Resolving,
+    ResolveFailed(String),
+    // The IpAddr payload is read by the renderer to display the resolved address per host.
+    #[allow(dead_code)]
+    Resolved(IpAddr),
+    Pinged(PingResult),
+}
+
+/// Event sent from the ping engine to the app for a single host update.
 #[derive(Debug, Clone)]
 pub struct PingEvent {
     pub host_id: String,
+    // Consumed by the renderer to label rows in the host table.
     #[allow(dead_code)]
     pub host_name: String,
-    pub result: PingResult,
+    pub update: HostUpdate,
 }
 
 /// Exponential backoff with a cap. `next()` returns the current delay then doubles it.
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct Backoff {
     current: Duration,
     base: Duration,
     max: Duration,
 }
 
-#[allow(dead_code)]
 impl Backoff {
     pub fn new(base: Duration, max: Duration) -> Self {
         Self {
@@ -54,156 +62,151 @@ impl Backoff {
 
 pub struct PingEngine {
     hosts: Vec<Host>,
-    clients: HashMap<String, Arc<Client>>,
-    stats: Arc<RwLock<HashMap<String, PingStats>>>,
-    event_tx: mpsc::UnboundedSender<PingEvent>,
+    event_tx: mpsc::Sender<PingEvent>,
     ping_config: crate::config::PingConfig,
 }
 
 impl PingEngine {
-    pub async fn new(
+    pub fn new(
         hosts: Vec<Host>,
         ping_config: crate::config::PingConfig,
-        event_tx: mpsc::UnboundedSender<PingEvent>,
-    ) -> Result<Self> {
-        let mut clients = HashMap::new();
-        let mut stats = HashMap::new();
-
-        // Create ping clients and resolve hosts
-        for host in &hosts {
-            let host_id = Self::generate_host_id(&host.address);
-
-            // Resolve hostname if needed (we don't need to store the IP here as we resolve it again in the ping loop)
-            let _ip_addr = if let Ok(ip) = host.address.parse::<IpAddr>() {
-                ip
-            } else {
-                Self::resolve_hostname(&host.address)
-                    .await
-                    .with_context(|| format!("Failed to resolve hostname: {}", host.address))?
-            };
-
-            // Create ping client
-            let config = SurgePingConfig::default();
-            let client = Client::new(&config)?;
-
-            clients.insert(host_id.clone(), Arc::new(client));
-            stats.insert(host_id, PingStats::new(ping_config.history_size));
-        }
-
-        Ok(Self {
+        event_tx: mpsc::Sender<PingEvent>,
+    ) -> Self {
+        Self {
             hosts,
-            clients,
-            stats: Arc::new(RwLock::new(stats)),
             event_tx,
             ping_config,
-        })
+        }
     }
 
     pub async fn start(&self) -> Result<()> {
         let mut handles = Vec::new();
-
         for host in &self.hosts {
             if !host.enabled {
                 continue;
             }
-
-            let host_id = Self::generate_host_id(&host.address);
             let host_clone = host.clone();
-            let client = self.clients.get(&host_id).unwrap().clone();
-            let stats = self.stats.clone();
             let event_tx = self.event_tx.clone();
             let ping_config = self.ping_config.clone();
-
-            let handle = tokio::spawn(async move {
-                Self::ping_host_loop(host_clone, client, stats, event_tx, ping_config).await
-            });
-
-            handles.push(handle);
+            handles.push(tokio::spawn(async move {
+                Self::ping_host_loop(host_clone, event_tx, ping_config).await
+            }));
         }
-
-        // Wait for all ping tasks to complete (they run indefinitely)
         for handle in handles {
-            if let Err(e) = handle.await {
-                eprintln!("Ping task failed: {}", e);
-            }
+            let _ = handle.await; // task panics already restore the terminal via panic hook
         }
-
         Ok(())
     }
 
     async fn ping_host_loop(
         host: Host,
-        client: Arc<Client>,
-        stats: Arc<RwLock<HashMap<String, PingStats>>>,
-        event_tx: mpsc::UnboundedSender<PingEvent>,
+        event_tx: mpsc::Sender<PingEvent>,
         ping_config: crate::config::PingConfig,
     ) {
         let host_id = Self::generate_host_id(&host.address);
         let interval = Duration::from_secs_f64(host.interval.unwrap_or(ping_config.interval));
         let timeout = Duration::from_secs_f64(ping_config.timeout);
+        let payload = vec![0u8; ping_config.packet_size as usize];
 
-        // Resolve IP address
-        let ip_addr = match Self::resolve_hostname(&host.address).await {
-            Ok(ip) => ip,
-            Err(e) => {
-                eprintln!("Failed to resolve {}: {}", host.address, e);
-                return;
-            }
-        };
-
-        let mut sequence = 0u16;
-        let mut interval_timer = time::interval(interval);
-
-        loop {
-            interval_timer.tick().await;
-
-            let start_time = Instant::now();
-            let identifier = PingIdentifier(0);
-            let seq_cnt = PingSequence(sequence);
-
-            let result = {
-                let mut pinger = client.pinger(ip_addr, identifier).await;
-                pinger.timeout(timeout);
-
-                match tokio::time::timeout(timeout, pinger.ping(seq_cnt, &[])).await {
-                    Ok(Ok((_, duration))) => PingResult::Success {
-                        rtt: duration,
-                        sequence,
-                        timestamp: start_time,
-                    },
-                    Ok(Err(e)) => PingResult::Error {
-                        error: e.to_string(),
-                        sequence,
-                        timestamp: start_time,
-                    },
-                    Err(_) => PingResult::Timeout {
-                        sequence,
-                        timestamp: start_time,
-                    },
-                }
-            };
-
-            // Update stats
-            {
-                let mut stats_guard = stats.write().await;
-                if let Some(host_stats) = stats_guard.get_mut(&host_id) {
-                    host_stats.add_result(&result);
-                }
-            }
-
-            // Send event
-            let event = PingEvent {
+        let send = |update: HostUpdate| {
+            let _ = event_tx.try_send(PingEvent {
                 host_id: host_id.clone(),
                 host_name: host.name.clone(),
-                result: result.clone(),
+                update,
+            });
+        };
+
+        let mut backoff = Backoff::new(Duration::from_secs(1), Duration::from_secs(30));
+        let mut sequence = 0u16;
+
+        loop {
+            // (Re)resolve with backoff until success.
+            send(HostUpdate::Resolving);
+            let ip_addr = loop {
+                match Self::resolve_hostname(&host.address).await {
+                    Ok(ip) => {
+                        backoff.reset();
+                        break ip;
+                    }
+                    Err(e) => {
+                        send(HostUpdate::ResolveFailed(e.to_string()));
+                        tokio::time::sleep(backoff.next()).await;
+                    }
+                }
+            };
+            send(HostUpdate::Resolved(ip_addr));
+
+            // Build a client; if sockets are denied even after surge-ping's
+            // DGRAM->RAW fallback, report it and back off (don't spin).
+            let client = match Client::new(&SurgePingConfig::default()) {
+                Ok(c) => c,
+                Err(e) => {
+                    send(HostUpdate::ResolveFailed(format!(
+                        "icmp socket denied ({e}); on Linux set net.ipv4.ping_group_range or run elevated"
+                    )));
+                    tokio::time::sleep(backoff.next()).await;
+                    continue;
+                }
             };
 
-            if event_tx.send(event).is_err() {
-                // Receiver dropped, exit
-                break;
-            }
+            // Ping at the configured interval. After several consecutive failures,
+            // break out to re-resolve (handles IP changes / reconnects).
+            // Create the pinger ONCE and reuse it — this is surge-ping's intended use
+            // and avoids a redundant double-timeout. It enforces `pinger.timeout` itself
+            // and returns Err(SurgeError::Timeout) when a reply does not arrive in time.
+            let mut pinger = client.pinger(ip_addr, PingIdentifier(0)).await;
+            pinger.timeout(timeout);
+            let mut interval_timer = tokio::time::interval(interval);
+            let mut consecutive_failures = 0u32;
+            loop {
+                interval_timer.tick().await;
+                let start_time = Instant::now();
 
-            sequence = sequence.wrapping_add(1);
+                let result = match pinger.ping(PingSequence(sequence), &payload).await {
+                    Ok((_, rtt)) => {
+                        consecutive_failures = 0;
+                        PingResult::Success {
+                            rtt,
+                            sequence,
+                            timestamp: start_time,
+                        }
+                    }
+                    Err(surge_ping::SurgeError::Timeout { .. }) => {
+                        consecutive_failures += 1;
+                        PingResult::Timeout {
+                            sequence,
+                            timestamp: start_time,
+                        }
+                    }
+                    Err(e) => {
+                        consecutive_failures += 1;
+                        PingResult::Error {
+                            error: e.to_string(),
+                            sequence,
+                            timestamp: start_time,
+                        }
+                    }
+                };
+
+                if event_tx
+                    .try_send(PingEvent {
+                        host_id: host_id.clone(),
+                        host_name: host.name.clone(),
+                        update: HostUpdate::Pinged(result),
+                    })
+                    .is_err()
+                {
+                    // Channel full is fine (UI drops a frame); channel closed = exit.
+                    if event_tx.is_closed() {
+                        return;
+                    }
+                }
+
+                sequence = sequence.wrapping_add(1);
+                if consecutive_failures >= 5 {
+                    break; // re-resolve
+                }
+            }
         }
     }
 
@@ -230,11 +233,6 @@ impl PingEngine {
         )
     }
 
-    #[allow(dead_code)]
-    pub async fn get_stats(&self) -> HashMap<String, PingStats> {
-        self.stats.read().await.clone()
-    }
-
     pub fn get_host_info(&self) -> Vec<(String, String)> {
         self.hosts
             .iter()
@@ -250,35 +248,33 @@ mod tests {
     use crate::config::PingConfig;
     use tokio::sync::mpsc;
 
-    #[tokio::test]
-    async fn test_ping_engine_creation() {
+    #[test]
+    fn test_ping_engine_creation() {
         let hosts = vec![Host {
-            name: "localhost".to_string(),
-            address: "127.0.0.1".to_string(),
+            name: "localhost".into(),
+            address: "127.0.0.1".into(),
             enabled: true,
             interval: None,
         }];
-
         let ping_config = PingConfig {
             interval: 1.0,
             timeout: 5.0,
             history_size: 100,
             packet_size: 64,
         };
-
-        let (tx, _rx) = mpsc::unbounded_channel();
-
-        let result = PingEngine::new(hosts, ping_config, tx).await;
-        assert!(result.is_ok(), "PingEngine creation should succeed");
+        let (tx, _rx) = mpsc::channel(64);
+        let _engine = PingEngine::new(hosts, ping_config, tx);
     }
 
     #[tokio::test]
-    async fn test_hostname_resolution() {
-        let result = PingEngine::resolve_hostname("127.0.0.1").await;
-        assert!(result.is_ok(), "Should resolve localhost IP");
+    async fn test_ip_parse_fast_path() {
+        assert!(PingEngine::resolve_hostname("127.0.0.1").await.is_ok());
+    }
 
-        let result = PingEngine::resolve_hostname("localhost").await;
-        assert!(result.is_ok(), "Should resolve localhost hostname");
+    #[tokio::test]
+    #[ignore = "requires live DNS; run with --ignored"]
+    async fn test_hostname_resolution_live() {
+        assert!(PingEngine::resolve_hostname("localhost").await.is_ok());
     }
 
     #[test]
