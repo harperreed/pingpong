@@ -1,8 +1,8 @@
 // ABOUTME: Captive-portal connectivity probe over plain HTTP.
 // ABOUTME: Classifies network as Online, CaptivePortal, or Offline.
 
-// Public items here are wired into the running app in later hardening tasks;
-// until then they are exercised only by unit tests. Temporary; remove once wired.
+// ProbeResult is referenced only from code the binary's entry point does not reach
+// (other leaf modules and tests), so the compiler reports it as dead.
 #![allow(dead_code)]
 
 #[derive(Debug, Clone, PartialEq)]

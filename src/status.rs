@@ -1,8 +1,8 @@
 // ABOUTME: Pure derivation of per-host and global connectivity state and the
 // ABOUTME: terminal-title summary string. No I/O — fully unit-testable.
 
-// Public items here are wired into the running app in later hardening tasks;
-// until then they are exercised only by unit tests. Temporary; remove once wired.
+// These items form the module's public API, exercised by the unit tests below;
+// the binary's entry point does not reach them, so the compiler reports them dead.
 #![allow(dead_code)]
 
 use crate::probe::ProbeResult;
@@ -93,6 +93,7 @@ pub fn connectivity(states: &[HostState], probe: &ProbeResult) -> ConnectivitySt
     }
 }
 
+/// Compute hosts-up count, mean RTT across Up hosts, and worst loss across Degraded/Down hosts.
 pub fn aggregate(states: &[HostState]) -> Aggregate {
     let hosts_total = states.len();
     let hosts_up = states
@@ -259,5 +260,52 @@ mod tests {
                 .contains("captive portal")
         );
         assert!(title(&ConnectivityState::Offline, &agg).contains("offline"));
+    }
+
+    #[test]
+    fn down_when_all_replies_lost() {
+        let s = stats_with(0, 5, 0); // 100% recent loss
+        assert_eq!(
+            host_state(Some(&s), true, None),
+            HostState::Down {
+                reason: "no replies".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn offline_when_no_hosts() {
+        // An empty host list must never read as Online, even if the probe is Online.
+        assert_eq!(
+            connectivity(&[], &ProbeResult::Online),
+            ConnectivityState::Offline
+        );
+    }
+
+    #[test]
+    fn aggregate_counts_and_worst_loss() {
+        let states = vec![
+            HostState::Up { rtt_ms: 10.0 },
+            HostState::Degraded { loss_pct: 15.0 },
+            HostState::Down { reason: "x".into() },
+        ];
+        let agg = aggregate(&states);
+        assert_eq!(agg.hosts_up, 1);
+        assert_eq!(agg.hosts_total, 3);
+        assert_eq!(agg.avg_rtt_ms, 10.0);
+        assert_eq!(agg.worst_loss_pct, 100.0); // a Down host counts as 100% loss
+    }
+
+    #[test]
+    fn title_degraded_shows_loss() {
+        let agg = Aggregate {
+            hosts_up: 2,
+            hosts_total: 3,
+            avg_rtt_ms: 0.0,
+            worst_loss_pct: 11.0,
+        };
+        let t = title(&ConnectivityState::Degraded, &agg);
+        assert!(t.contains("2/3 up"));
+        assert!(t.contains("11% loss"));
     }
 }
