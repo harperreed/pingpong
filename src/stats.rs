@@ -134,7 +134,7 @@ impl PingStats {
         let sum: Duration = rtts.iter().sum();
         let avg = sum / rtts.len() as u32;
 
-        let median = if sorted_rtts.len() % 2 == 0 {
+        let median = if sorted_rtts.len().is_multiple_of(2) {
             let mid = sorted_rtts.len() / 2;
             (sorted_rtts[mid - 1] + sorted_rtts[mid]) / 2
         } else {

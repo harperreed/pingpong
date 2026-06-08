@@ -594,7 +594,7 @@ fn render_animation_window(
     // Overlay flashing red X for connection failures
     if has_connection_failure {
         // Flash every 0.5 seconds
-        let flash_on = ((animation_time * 2.0) as usize % 2) == 0;
+        let flash_on = ((animation_time * 2.0) as usize).is_multiple_of(2);
         if flash_on {
             animation_art = generate_connection_failure_overlay(
                 animation_art,
@@ -711,9 +711,9 @@ fn generate_plasma_animation(time: f64, width: usize, height: usize) -> String {
             let base_char = plasma_layers[layer_choice][char_index];
 
             // Add special effects for high intensity areas
-            let char_to_use = if intensity > 2.0 && (x + y + time_int) % 7 == 0 {
+            let char_to_use = if intensity > 2.0 && (x + y + time_int).is_multiple_of(7) {
                 fx_chars[time_int % fx_chars.len()]
-            } else if intensity > 1.5 && (x * 2 + y + time_int / 2) % 11 == 0 {
+            } else if intensity > 1.5 && (x * 2 + y + time_int / 2).is_multiple_of(11) {
                 fx_chars[(time_int / 2) % fx_chars.len()]
             } else {
                 base_char
@@ -852,7 +852,7 @@ fn generate_globe_animation(time: f64, width: usize, height: usize) -> String {
                         continent_layers[terrain_type][elevation]
                     } else {
                         // Nighttime - show city lights occasionally
-                        if elevation > 4 && (x + y + (time * 2.0) as usize) % 12 == 0 {
+                        if elevation > 4 && (x + y + (time * 2.0) as usize).is_multiple_of(12) {
                             '●' // City lights
                         } else {
                             '▓' // Darker land
@@ -891,9 +891,9 @@ fn generate_globe_animation(time: f64, width: usize, height: usize) -> String {
             } else {
                 // Deep space with twinkling stars and satellites
                 let star_seed = x * 17 + y * 23 + (time * 1.25) as usize;
-                let char_to_use = if star_seed % 25 == 0 {
+                let char_to_use = if star_seed.is_multiple_of(25) {
                     star_chars[star_seed % star_chars.len()]
-                } else if star_seed % 47 == 0 && (time * 1.0) as usize % 15 < 3 {
+                } else if star_seed.is_multiple_of(47) && (time * 1.0) as usize % 15 < 3 {
                     '🛰' // Occasional satellite
                 } else {
                     ' '
