@@ -40,8 +40,6 @@ impl Backoff {
             max,
         }
     }
-    // Intentional inherent next(): Backoff is a delay sequence, not an Iterator (no Option/associated Item).
-    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Duration {
         let delay = self.current.min(self.max);
         self.current = (self.current * 2).min(self.max);
