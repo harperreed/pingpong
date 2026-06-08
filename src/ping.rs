@@ -40,11 +40,13 @@ impl Backoff {
             max,
         }
     }
+
     pub fn next(&mut self) -> Duration {
         let delay = self.current.min(self.max);
         self.current = (self.current * 2).min(self.max);
         delay
     }
+
     pub fn reset(&mut self) {
         self.current = self.base;
     }
