@@ -135,10 +135,10 @@ impl Config {
 
     /// Clamp nonsensical values so a hand-edited config can't wedge the app.
     pub fn validate(&mut self) {
-        if self.ping.interval.is_nan() || self.ping.interval < 0.1 {
+        if !self.ping.interval.is_finite() || self.ping.interval < 0.1 {
             self.ping.interval = 1.0;
         }
-        if self.ping.timeout.is_nan() || self.ping.timeout < 0.1 {
+        if !self.ping.timeout.is_finite() || self.ping.timeout < 0.1 {
             self.ping.timeout = 3.0;
         }
         if self.ping.history_size == 0 {
@@ -203,9 +203,25 @@ mod tests {
         c.ping.interval = 0.0;
         c.ping.timeout = 0.0;
         c.ping.history_size = 0;
+        c.ping.packet_size = 0;
+        c.ui.refresh_rate = 0;
         c.validate();
         assert!(c.ping.interval >= 0.1);
         assert!(c.ping.timeout >= 0.1);
         assert!(c.ping.history_size >= 1);
+        assert!(c.ping.packet_size >= 1);
+        assert!(c.ui.refresh_rate >= 1);
+    }
+
+    #[test]
+    fn validate_rejects_non_finite_timeouts() {
+        // NaN and infinity would panic Duration::from_secs_f64 in the ping loop;
+        // validate must replace them with finite defaults.
+        let mut c = Config::default();
+        c.ping.interval = f64::INFINITY;
+        c.ping.timeout = f64::NAN;
+        c.validate();
+        assert!(c.ping.interval.is_finite() && c.ping.interval >= 0.1);
+        assert!(c.ping.timeout.is_finite() && c.ping.timeout >= 0.1);
     }
 }
