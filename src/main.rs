@@ -7,7 +7,9 @@ use clap::{Parser, ValueEnum};
 mod app;
 mod config;
 mod ping;
+mod probe;
 mod stats;
+mod status;
 mod tui;
 
 use app::App;
