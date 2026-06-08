@@ -1,11 +1,6 @@
 // ABOUTME: Captive-portal connectivity probe over plain HTTP.
 // ABOUTME: Classifies the network as Online, CaptivePortal, or Offline.
 
-// `probe_once` runs from a spawned task, and the `url` carried by `CaptivePortal` is read
-// through `App.portal` by the TUI connectivity banner — another module. A binary crate can't
-// see those cross-module uses, so the field reads as dead here; suppress it module-wide.
-#![allow(dead_code)]
-
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;

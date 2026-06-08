@@ -16,7 +16,7 @@ use crate::stats::PingResult;
 pub enum HostUpdate {
     Resolving,
     ResolveFailed(String),
-    // The IpAddr payload is read by the renderer to display the resolved address per host.
+    // The app records that resolution succeeded; the resolved IpAddr itself is not read.
     #[allow(dead_code)]
     Resolved(IpAddr),
     Pinged(PingResult),
@@ -26,7 +26,7 @@ pub enum HostUpdate {
 #[derive(Debug, Clone)]
 pub struct PingEvent {
     pub host_id: String,
-    // Consumed by the renderer to label rows in the host table.
+    // Carried with each event but not read; host rows are labeled from host_info instead.
     #[allow(dead_code)]
     pub host_name: String,
     pub update: HostUpdate,

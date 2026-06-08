@@ -172,7 +172,7 @@ pub struct TuiState {
     pub show_lore: bool,
     pub theme_name: String,
     pub show_details: bool,
-    // Height in rows of the per-host latency graph, read by the renderer.
+    // Stored from config; the renderer reads graph height from RenderOpts, not this field.
     #[allow(dead_code)]
     pub graph_height: u16,
 }

@@ -1,10 +1,6 @@
 // ABOUTME: Pure derivation of per-host and global connectivity state and the
 // ABOUTME: terminal-title summary string. No I/O — fully unit-testable.
 
-// These items form the module's public API, exercised by the unit tests below;
-// the binary's entry point does not reach them, so the compiler reports them dead.
-#![allow(dead_code)]
-
 use crate::probe::ProbeResult;
 use crate::stats::PingStats;
 
