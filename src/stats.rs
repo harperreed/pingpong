@@ -98,6 +98,8 @@ impl PingStats {
         }
     }
 
+    // Total-history loss; used in tests and available for callers that want lifetime stats.
+    #[allow(dead_code)]
     pub fn packet_loss_percent(&self) -> f64 {
         if self.total_pings == 0 {
             0.0
@@ -162,6 +164,8 @@ impl PingStats {
         }
     }
 
+    // Derived quality category; available for callers that want a label beyond HostState.
+    #[allow(dead_code)]
     pub fn connection_quality(&self) -> ConnectionQuality {
         let loss_percent = self.packet_loss_percent_recent(20); // Last 20 pings
         let rtt_stats = self.rtt_stats();
@@ -205,36 +209,21 @@ impl PingStats {
         self.errors
     }
 
-    #[allow(dead_code)]
-    pub fn rtt_history_for_graph(&self, points: usize) -> Vec<Option<f64>> {
-        let total_points = self.history.len();
-        if total_points == 0 {
-            return vec![None; points];
-        }
-
-        let step = if total_points <= points {
-            1
-        } else {
-            total_points / points
-        };
-
-        let mut graph_points = Vec::with_capacity(points);
-
-        for i in (0..total_points).step_by(step).take(points) {
-            if let Some(result) = self.history.get(i) {
-                graph_points.push(result.rtt().map(|rtt| rtt.as_secs_f64() * 1000.0));
-            // Convert to ms
-            } else {
-                graph_points.push(None);
-            }
-        }
-
-        // Pad with None if needed
-        while graph_points.len() < points {
-            graph_points.push(None);
-        }
-
-        graph_points
+    /// Recent RTTs in milliseconds for the sparkline, oldest→newest, at most `points`.
+    /// `None` marks a gap (timeout/error). Called by the per-host graph in render.
+    pub fn rtt_history_for_graph(&self, points: usize) -> Vec<Option<u64>> {
+        let mut v: Vec<Option<u64>> = self
+            .history
+            .iter()
+            .rev()
+            .take(points)
+            .map(|r| match r {
+                PingResult::Success { rtt, .. } => Some((rtt.as_secs_f64() * 1000.0) as u64),
+                _ => None,
+            })
+            .collect();
+        v.reverse();
+        v
     }
 }
 
@@ -251,6 +240,8 @@ pub struct RttStats {
     pub jitter: Duration,
 }
 
+// Quality classification; variants are available for external callers and tests.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionQuality {
     Good,
@@ -268,6 +259,8 @@ impl ConnectionQuality {
         }
     }
 
+    // Text symbol for quality; available for callers that render outside HostState.
+    #[allow(dead_code)]
     pub fn symbol(&self) -> &'static str {
         match self {
             ConnectionQuality::Good => "●",
@@ -281,6 +274,40 @@ impl ConnectionQuality {
 mod stats_tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn graph_history_maps_ms_and_gaps_oldest_to_newest() {
+        let mut s = PingStats::new(100);
+        s.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(10),
+            sequence: 0,
+            timestamp: Instant::now(),
+        }); // oldest
+        s.add_result(&PingResult::Timeout {
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        s.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(30),
+            sequence: 2,
+            timestamp: Instant::now(),
+        }); // newest
+        assert_eq!(s.rtt_history_for_graph(3), vec![Some(10), None, Some(30)]);
+    }
+
+    #[test]
+    fn graph_history_takes_most_recent_points() {
+        let mut s = PingStats::new(100);
+        for i in 0..5u64 {
+            s.add_result(&PingResult::Success {
+                rtt: Duration::from_millis((i + 1) * 10),
+                sequence: i as u16,
+                timestamp: Instant::now(),
+            });
+        }
+        // request 2 -> the two most recent (40ms, 50ms), oldest->newest
+        assert_eq!(s.rtt_history_for_graph(2), vec![Some(40), Some(50)]);
+    }
 
     fn success(ms: u64) -> PingResult {
         PingResult::Success {

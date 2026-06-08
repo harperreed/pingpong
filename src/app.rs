@@ -12,6 +12,7 @@ use crate::config::Config;
 use crate::ping::{HostUpdate, PingEngine, PingEvent};
 use crate::probe::ProbeResult;
 use crate::stats::PingStats;
+use crate::status::{self, ConnectivityState, HostState};
 use crate::tui::{AnimationType, TuiApp};
 
 pub struct App {
@@ -19,18 +20,14 @@ pub struct App {
     tui: TuiApp,
     stats: HashMap<String, PingStats>,
     // Per-host DNS resolution state, keyed by host id; read by the connectivity status renderer.
-    #[allow(dead_code)]
     resolved: HashMap<String, bool>,
     // Per-host last resolution error (None once resolved), keyed by host id; read by the error banner.
-    #[allow(dead_code)]
     resolve_err: HashMap<String, Option<String>>,
     // Latest captive-portal/connectivity classification from the probe; read by the connectivity banner.
-    #[allow(dead_code)]
     portal: ProbeResult,
     event_rx: mpsc::Receiver<PingEvent>,
     probe_rx: mpsc::Receiver<ProbeResult>,
     // (host_id, display name) pairs identifying each monitored host; used to label host rows.
-    #[allow(dead_code)]
     host_info: Vec<(String, String)>,
 }
 
@@ -51,6 +48,11 @@ impl App {
         // Initialize TUI
         let mut tui = TuiApp::new(animation_type).await?;
         tui.set_host_info(host_info.clone());
+        tui.set_ui_config(
+            config.ui.theme.clone(),
+            config.ui.show_details,
+            config.ui.graph_height,
+        );
 
         // Start ping engine in background
         tokio::spawn(async move {
@@ -104,7 +106,34 @@ impl App {
                 // Update UI
                 // Errors propagate out of run; App's Drop restores the terminal before main prints them.
                 _ = ui_update_interval.tick() => {
-                    self.tui.draw(&self.stats).await?;
+                    let host_states: Vec<(String, HostState)> = self
+                        .host_info
+                        .iter()
+                        .map(|(id, _)| {
+                            let resolved = *self.resolved.get(id).unwrap_or(&false);
+                            let err = self.resolve_err.get(id).and_then(|o| o.as_deref());
+                            (id.clone(), status::host_state(self.stats.get(id), resolved, err))
+                        })
+                        .collect();
+                    let states: Vec<HostState> = host_states.iter().map(|(_, s)| s.clone()).collect();
+                    let conn = status::connectivity(&states, &self.portal);
+                    let banner = match &conn {
+                        ConnectivityState::CaptivePortal { url } => {
+                            Some(format!("\u{26a0}  Captive portal detected \u{2014} open {url}"))
+                        }
+                        ConnectivityState::Offline => {
+                            Some("\u{2717}  Offline \u{2014} no connectivity".to_string())
+                        }
+                        _ => None,
+                    };
+                    let opts = crate::tui::RenderOpts {
+                        theme: crate::tui::Theme::from_name(&self.tui.theme_name()),
+                        show_details: self.tui.show_details(),
+                        graph_height: self.config.ui.graph_height,
+                        banner,
+                        host_states,
+                    };
+                    self.tui.draw(&self.stats, &opts).await?;
                     if self.tui.handle_events().await? { break; }
                 }
 

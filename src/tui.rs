@@ -11,8 +11,8 @@ use crossterm::{
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Paragraph, Sparkline},
     Frame, Terminal,
 };
 use std::collections::HashMap;
@@ -75,9 +75,10 @@ impl AnimationType {
 }
 
 // Color palette the renderer applies to status text and graphs.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub struct Theme {
+    // fg is part of the palette for completeness; not read by the current renderer.
+    #[allow(dead_code)]
     pub fg: Color,
     pub accent: Color,
     pub good: Color,
@@ -88,7 +89,6 @@ pub struct Theme {
 
 impl Theme {
     // Returns the standard dark-background palette.
-    #[allow(dead_code)]
     pub fn dark() -> Self {
         Self {
             fg: Color::Green,
@@ -100,7 +100,6 @@ impl Theme {
         }
     }
     // Returns the standard light-background palette.
-    #[allow(dead_code)]
     pub fn light() -> Self {
         Self {
             fg: Color::Black,
@@ -112,7 +111,6 @@ impl Theme {
         }
     }
     // Resolves a config theme name (dark/light/auto) into a concrete palette.
-    #[allow(dead_code)]
     pub fn from_name(name: &str) -> Self {
         match name {
             "light" => Self::light(),
@@ -142,7 +140,6 @@ impl Theme {
 }
 
 // Per-frame render inputs the main view reads: palette, detail toggle, graph height, banner, and per-host states.
-#[allow(dead_code)]
 pub struct RenderOpts {
     pub theme: Theme,
     pub show_details: bool,
@@ -274,14 +271,25 @@ impl TuiApp {
     }
 
     // Pushes theme/detail/graph-height settings from app config into render state.
-    #[allow(dead_code)]
     pub fn set_ui_config(&mut self, theme_name: String, show_details: bool, graph_height: u16) {
         self.state.theme_name = theme_name;
         self.state.show_details = show_details;
         self.state.graph_height = graph_height;
     }
 
-    pub async fn draw(&mut self, stats: &HashMap<String, PingStats>) -> anyhow::Result<()> {
+    pub fn theme_name(&self) -> String {
+        self.state.theme_name.clone()
+    }
+
+    pub fn show_details(&self) -> bool {
+        self.state.show_details
+    }
+
+    pub async fn draw(
+        &mut self,
+        stats: &HashMap<String, PingStats>,
+        opts: &RenderOpts,
+    ) -> anyhow::Result<()> {
         let host_info = self.host_info.clone();
         let show_help = self.state.show_help;
 
@@ -329,6 +337,7 @@ impl TuiApp {
                     chicago_time,
                     use_24_hour,
                     show_lore,
+                    opts,
                 );
             }
         })?;
@@ -410,14 +419,35 @@ fn render_main(
     chicago_time: DateTime<chrono_tz::Tz>,
     use_24_hour: bool,
     show_lore: bool,
+    opts: &RenderOpts,
 ) {
     let size = f.area();
+
+    // When a connectivity banner is present, reserve a 1-row strip above everything.
+    let (banner_area, body_area) = if opts.banner.is_some() {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(size);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, size)
+    };
+
+    if let (Some(area), Some(text)) = (banner_area, opts.banner.as_ref()) {
+        let p = Paragraph::new(text.clone()).style(
+            Style::default()
+                .fg(opts.theme.warn)
+                .add_modifier(Modifier::BOLD),
+        );
+        f.render_widget(p, area);
+    }
 
     // Create layout with status bar at bottom
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
-        .split(size);
+        .split(body_area);
 
     // Create 4-window layout: left side split top/bottom, right side single window
     let main_chunks = Layout::default()
@@ -444,13 +474,13 @@ fn render_main(
             .split(main_chunks[0]);
 
         // Render pings window (top left)
-        render_pings_window(f, left_chunks[0], stats, host_info);
+        render_pings_window(f, left_chunks[0], stats, host_info, opts);
 
         // Render lore window (bottom left)
         render_lore_window(f, left_chunks[1], animation_type);
     } else {
         // Render pings window taking full left side
-        render_pings_window(f, main_chunks[0], stats, host_info);
+        render_pings_window(f, main_chunks[0], stats, host_info, opts);
     }
 
     // Render animation (right side)
@@ -473,69 +503,72 @@ fn render_pings_window(
     area: Rect,
     stats: &HashMap<String, PingStats>,
     host_info: &[(String, String)],
+    opts: &RenderOpts,
 ) {
-    let mut text = String::new();
-    text.push_str("🏓 Network Monitor\n");
-    text.push_str("═══════════════════════════════════════════════\n\n");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" Network Status ");
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
 
-    for (i, (host_id, host_name)) in host_info.iter().enumerate() {
-        if let Some(stat) = stats.get(host_id) {
-            let quality = stat.connection_quality();
-            let rtt_stats = stat.rtt_stats();
-            let loss = stat.packet_loss_percent();
-
-            text.push_str(&format!(
-                "{} {} {}\n",
-                quality.symbol(),
-                host_name,
-                "─".repeat(35usize.saturating_sub(host_name.chars().count().min(25)))
-            ));
-            text.push_str(&format!(
-                "   RTT: {:.1}ms (avg) | Loss: {:.1}% | Pings: {}\n",
-                rtt_stats.avg.as_secs_f64() * 1000.0,
-                loss,
-                stat.total_pings()
-            ));
-
-            // Add status indicator bar
-            let status_bar = if loss < 1.0 && rtt_stats.avg.as_millis() < 100 {
-                "   Status: ████████████ EXCELLENT"
-            } else if loss < 5.0 && rtt_stats.avg.as_millis() < 200 {
-                "   Status: ████████▓▓▓▓ GOOD"
-            } else if loss < 10.0 && rtt_stats.avg.as_millis() < 500 {
-                "   Status: ██████▓▓▓▓▓▓ FAIR"
-            } else {
-                "   Status: ████▓▓▓▓▓▓▓▓ POOR"
-            };
-            text.push_str(&format!("{}\n", status_bar));
-        } else {
-            text.push_str(&format!(
-                "● {} {}\n",
-                host_name,
-                "─".repeat(35usize.saturating_sub(host_name.chars().count().min(25)))
-            ));
-            text.push_str("   Status: ░░░░░░░░░░░░ WAITING\n");
-        }
-
-        // Add separator line between hosts (except last one)
-        if i < host_info.len() - 1 {
-            text.push_str("───────────────────────────────────────────────\n");
-        }
-        text.push('\n');
+    if host_info.is_empty() {
+        return;
     }
 
-    text.push_str("Controls: 'q' quit | 'h' help | 'space' pause | 'v' cycle viz | 'p' toggle time | 'l' toggle lore");
+    // Each host row: a 2-line header plus (when details are on) a sparkline.
+    let graph_h = if opts.show_details {
+        opts.graph_height.max(1)
+    } else {
+        0
+    };
+    let per_host = 2 + graph_h;
+    let constraints: Vec<Constraint> = host_info
+        .iter()
+        .map(|_| Constraint::Length(per_host))
+        .collect();
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
 
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Network Status "),
-        )
-        .style(Style::default().fg(Color::Green))
-        .alignment(Alignment::Left);
+    for (row, (host_id, host_name)) in rows.iter().zip(host_info.iter()) {
+        let state = opts
+            .host_states
+            .iter()
+            .find(|(id, _)| id == host_id)
+            .map(|(_, s)| s.clone());
+        let (symbol, color, detail) = match &state {
+            Some(crate::status::HostState::Up { rtt_ms }) => {
+                ("\u{25cf}", opts.theme.good, format!("{rtt_ms:.0}ms"))
+            }
+            Some(crate::status::HostState::Degraded { loss_pct }) => {
+                ("\u{25d0}", opts.theme.warn, format!("{loss_pct:.0}% loss"))
+            }
+            Some(crate::status::HostState::Down { reason }) => {
+                ("\u{2717}", opts.theme.bad, format!("down: {reason}"))
+            }
+            _ => ("\u{25cb}", opts.theme.dim, "resolving\u{2026}".to_string()),
+        };
 
-    f.render_widget(paragraph, area);
+        let sub = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(0)])
+            .split(*row);
+
+        let header = Paragraph::new(format!("{symbol} {host_name}\n   {detail}"))
+            .style(Style::default().fg(color));
+        f.render_widget(header, sub[0]);
+
+        if opts.show_details {
+            if let Some(stat) = stats.get(host_id) {
+                // Option<u64> preserves gaps (None) for timeouts/errors.
+                let spark = Sparkline::default()
+                    .data(stat.rtt_history_for_graph(sub[1].width as usize))
+                    .style(Style::default().fg(opts.theme.accent));
+                f.render_widget(spark, sub[1]);
+            }
+        }
+    }
 }
 
 fn render_lore_window(f: &mut Frame, area: Rect, animation_type: AnimationType) {
@@ -1761,11 +1794,14 @@ fn render_help(f: &mut Frame) {
         "  v           - Cycle through visualizations",
         "  p           - Toggle 12/24 hour time format",
         "  l           - Toggle lore window visibility",
+        "  d           - Toggle per-host detail graphs",
+        "  t           - Cycle color theme (dark/light/auto)",
         "",
         "INDICATORS:",
-        "  ●           - Good connection (< 2% loss, < 100ms)",
-        "  ◐           - Fair connection (< 10% loss, < 500ms)",
-        "  ○           - Poor connection (> 10% loss or > 500ms)",
+        "  \u{25cf}           - Host up (healthy)",
+        "  \u{25d0}           - Host degraded (packet loss)",
+        "  \u{2717}           - Host down",
+        "  \u{25cb}           - Resolving / waiting",
         "",
         "Press 'h' or F1 to close this help",
     ];
