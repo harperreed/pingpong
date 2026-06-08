@@ -297,6 +297,14 @@ mod stats_tests {
         }
     }
 
+    fn error_result() -> PingResult {
+        PingResult::Error {
+            error: "test".to_string(),
+            sequence: 0,
+            timestamp: Instant::now(),
+        }
+    }
+
     #[test]
     fn empty_stats_are_zero() {
         let s = PingStats::new(100);
@@ -313,8 +321,9 @@ mod stats_tests {
         s.add_result(&success(10));
         s.add_result(&timeout());
         s.add_result(&timeout());
-        assert_eq!(s.total_pings(), 4);
-        assert!((s.packet_loss_percent() - 50.0).abs() < 1e-9);
+        s.add_result(&error_result());
+        assert_eq!(s.total_pings(), 5);
+        assert!((s.packet_loss_percent() - 60.0).abs() < 1e-9); // 3 of 5 non-success
     }
 
     #[test]
