@@ -75,6 +75,7 @@ impl App {
                 }
 
                 // Update UI
+                // Errors propagate out of run; App's Drop restores the terminal before main prints them.
                 _ = ui_update_interval.tick() => {
                     let stats = self.stats.read().await;
                     self.tui.draw(&stats).await?;
