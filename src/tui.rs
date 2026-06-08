@@ -118,7 +118,7 @@ impl Theme {
             "light" => Self::light(),
             "dark" => Self::dark(),
             _ => {
-                // auto: COLORFGBG like "15;0" => light bg (last field high) -> light theme
+                // auto: COLORFGBG like "0;15" (fg=0, bg=15 >= 7) => light background -> light theme
                 match std::env::var("COLORFGBG")
                     .ok()
                     .and_then(|v| v.rsplit(';').next().map(|s| s.to_string()))
@@ -1824,5 +1824,7 @@ mod theme_tests {
         assert_eq!(Theme::cycle_name("dark"), "light");
         assert_eq!(Theme::cycle_name("light"), "auto");
         assert_eq!(Theme::cycle_name("auto"), "dark");
+        // unknown/empty names fall back to "dark" (the _ arm)
+        assert_eq!(Theme::cycle_name(""), "dark");
     }
 }
