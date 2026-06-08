@@ -28,6 +28,7 @@ pub struct App {
     #[allow(dead_code)]
     portal: ProbeResult,
     event_rx: mpsc::Receiver<PingEvent>,
+    probe_rx: mpsc::Receiver<ProbeResult>,
     // (host_id, display name) pairs identifying each monitored host; used to label host rows.
     #[allow(dead_code)]
     host_info: Vec<(String, String)>,
@@ -56,6 +57,20 @@ impl App {
             let _ = ping_engine.start().await;
         });
 
+        // Start captive-portal probe loop in background
+        let (probe_tx, probe_rx) = mpsc::channel::<ProbeResult>(8);
+        let portal_url = config.ping.portal_check_url.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                tick.tick().await;
+                let r = crate::probe::probe_once(&portal_url).await;
+                if probe_tx.send(r).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         Ok(Self {
             config,
             tui,
@@ -64,6 +79,7 @@ impl App {
             resolve_err: HashMap::new(),
             portal: ProbeResult::Offline,
             event_rx,
+            probe_rx,
             host_info,
         })
     }
@@ -81,6 +97,9 @@ impl App {
                         self.handle_ping_event(ping_event);
                     }
                 }
+
+                // Store the latest captive-portal probe result
+                Some(p) = self.probe_rx.recv() => { self.portal = p; }
 
                 // Update UI
                 // Errors propagate out of run; App's Drop restores the terminal before main prints them.

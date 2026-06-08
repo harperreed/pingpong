@@ -23,6 +23,9 @@ pub struct PingConfig {
     pub history_size: usize,
     /// Packet size in bytes
     pub packet_size: u16,
+    /// URL used to detect captive portals (plain HTTP; default Apple's endpoint).
+    #[serde(default = "default_portal_url")]
+    pub portal_check_url: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -55,6 +58,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_portal_url() -> String {
+    "http://captive.apple.com".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -63,6 +70,7 @@ impl Default for Config {
                 timeout: 3.0,
                 history_size: 300, // 5 minutes at 1s intervals
                 packet_size: 32,
+                portal_check_url: default_portal_url(),
             },
             hosts: vec![
                 Host {

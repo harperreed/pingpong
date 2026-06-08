@@ -261,6 +261,7 @@ mod tests {
             timeout: 5.0,
             history_size: 100,
             packet_size: 64,
+            portal_check_url: "http://captive.apple.com".to_string(),
         };
         let (tx, _rx) = mpsc::channel(64);
         let _engine = PingEngine::new(hosts, ping_config, tx);
