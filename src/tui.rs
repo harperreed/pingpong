@@ -152,10 +152,6 @@ pub struct RenderOpts {
 }
 
 pub struct TuiState {
-    #[allow(dead_code)]
-    pub selected_tab: usize,
-    #[allow(dead_code)]
-    pub selected_host: usize,
     pub show_help: bool,
     pub paused: bool,
     pub animation_frame: usize,
@@ -189,8 +185,6 @@ impl TuiState {
         let chicago_now = Central.from_utc_datetime(&Utc::now().naive_utc());
 
         Self {
-            selected_tab: 0,
-            selected_host: 0,
             show_help: false,
             paused: false,
             animation_frame: 0,
