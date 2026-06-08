@@ -43,6 +43,11 @@ pub fn terminal_leave() {
     let _ = stdout.flush();
 }
 
+/// Smallest safe step for `Iterator::step_by` (which panics on 0).
+fn safe_step(n: usize) -> usize {
+    n.max(1)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationType {
     Plasma,
@@ -320,7 +325,10 @@ fn render_main(
     if show_lore {
         // Calculate dynamic split based on number of hosts (more hosts = more space for pings)
         let host_count = host_info.len();
-        let ping_percentage = std::cmp::min(80, 40 + (host_count * 8)); // 40% base + 8% per host, max 80%
+        let ping_percentage = std::cmp::min(
+            80usize,
+            40usize.saturating_add(host_count.saturating_mul(8)),
+        ); // 40% base + 8% per host, max 80%
         let lore_percentage = 100 - ping_percentage;
 
         let left_chunks = Layout::default()
@@ -376,7 +384,7 @@ fn render_pings_window(
                 "{} {} {}\n",
                 quality.symbol(),
                 host_name,
-                "─".repeat(35 - host_name.len().min(25))
+                "─".repeat(35usize.saturating_sub(host_name.chars().count().min(25)))
             ));
             text.push_str(&format!(
                 "   RTT: {:.1}ms (avg) | Loss: {:.1}% | Pings: {}\n",
@@ -400,7 +408,7 @@ fn render_pings_window(
             text.push_str(&format!(
                 "● {} {}\n",
                 host_name,
-                "─".repeat(35 - host_name.len().min(25))
+                "─".repeat(35usize.saturating_sub(host_name.chars().count().min(25)))
             ));
             text.push_str("   Status: ░░░░░░░░░░░░ WAITING\n");
         }
@@ -1145,7 +1153,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
         // Add occasional static characters (residual code) - much more stable
         if !has_stream && (column_base_seed % 23) < 3 {
-            let static_y = (column_base_seed / 5) % effective_height;
+            let static_y = (column_base_seed / 5) % effective_height.max(1);
             let static_char =
                 matrix_chars[(column_base_seed * 7 + time_factor / 10) % matrix_chars.len()];
 
@@ -1170,8 +1178,10 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
         for _ in 0..num_glitches {
             // More stable glitch positions - less random jumping
-            let glitch_x = ((time * 3.0) as usize * 7 + effective_width / 3) % effective_width;
-            let glitch_y = ((time * 2.0) as usize * 11 + effective_height / 4) % effective_height;
+            let glitch_x =
+                ((time * 3.0) as usize * 7 + effective_width / 3) % effective_width.max(1);
+            let glitch_y =
+                ((time * 2.0) as usize * 11 + effective_height / 4) % effective_height.max(1);
 
             if glitch_y < result.len() {
                 let mut chars: Vec<char> = result[glitch_y].chars().collect();
@@ -1320,8 +1330,8 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
         let num_mutations = (effective_height as f64 * mutation_rate) as usize;
 
         for _ in 0..num_mutations {
-            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height;
-            let x = rand::random::<usize>() % effective_width;
+            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height.max(1);
+            let x = rand::random::<usize>() % effective_width.max(1);
 
             if y < result.len() {
                 let mut chars: Vec<char> = result[y].chars().collect();
@@ -1430,10 +1440,10 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
     }
 
     // Add network quality indicators as scope grid
-    for y in (0..effective_height).step_by(effective_height / 4) {
+    for y in (0..effective_height).step_by(safe_step(effective_height / 4)) {
         if y < result.len() {
             let mut chars: Vec<char> = result[y].chars().collect();
-            for x in (0..effective_width).step_by(effective_width / 8) {
+            for x in (0..effective_width).step_by(safe_step(effective_width / 8)) {
                 if x < chars.len() && chars[x] == ' ' {
                     chars[x] = '·';
                 }
