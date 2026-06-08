@@ -211,18 +211,22 @@ impl PingEngine {
     }
 
     async fn resolve_hostname(hostname: &str) -> Result<IpAddr> {
-        // Try parsing as IP first
+        // IP literals need no DNS; resolve them synchronously.
         if let Ok(ip) = hostname.parse::<IpAddr>() {
             return Ok(ip);
         }
 
-        // Resolve hostname
-        let ips =
-            lookup_host(hostname).with_context(|| format!("DNS lookup failed for {}", hostname))?;
+        // dns_lookup::lookup_host is blocking; run it on the blocking thread pool
+        // so a slow or unresponsive resolver can't park a tokio worker thread.
+        let owned = hostname.to_string();
+        let ips = tokio::task::spawn_blocking(move || lookup_host(&owned))
+            .await
+            .context("DNS resolver task panicked")?
+            .with_context(|| format!("DNS lookup failed for {hostname}"))?;
 
         ips.into_iter()
             .next()
-            .with_context(|| format!("No IP addresses found for {}", hostname))
+            .with_context(|| format!("No IP addresses found for {hostname}"))
     }
 
     fn generate_host_id(address: &str) -> String {
