@@ -47,9 +47,9 @@ struct Cli {
     #[arg(short, long, default_value = "pingpong.toml")]
     config: String,
 
-    /// Ping interval in seconds
-    #[arg(short, long, default_value = "1.0")]
-    interval: f64,
+    /// Ping interval in seconds (overrides config when set)
+    #[arg(short, long)]
+    interval: Option<f64>,
 
     /// Additional hosts to ping (can be used multiple times)
     #[arg(long)]
@@ -79,9 +79,10 @@ async fn main() -> Result<()> {
     }
 
     // Override interval if specified
-    if cli.interval != 1.0 {
-        config.set_interval(cli.interval);
+    if let Some(interval) = cli.interval {
+        config.set_interval(interval);
     }
+    config.validate();
 
     // Convert animation choice if provided
     let animation_type = cli.animation.map(|choice| choice.into());

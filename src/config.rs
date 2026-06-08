@@ -120,12 +120,11 @@ impl Config {
     }
 
     pub fn add_host(&mut self, address: String) {
-        let name = if address.chars().all(|c| c.is_ascii_digit() || c == '.') {
-            format!("IP {}", address)
-        } else {
-            address.clone()
+        use std::net::IpAddr;
+        let name = match address.parse::<IpAddr>() {
+            Ok(IpAddr::V4(_)) => format!("IP {address}"),
+            _ => address.clone(), // hostname or IPv6 -> use as-is
         };
-
         self.hosts.push(Host {
             name,
             address,
@@ -134,11 +133,79 @@ impl Config {
         });
     }
 
+    /// Clamp nonsensical values so a hand-edited config can't wedge the app.
+    pub fn validate(&mut self) {
+        if self.ping.interval.is_nan() || self.ping.interval < 0.1 {
+            self.ping.interval = 1.0;
+        }
+        if self.ping.timeout.is_nan() || self.ping.timeout < 0.1 {
+            self.ping.timeout = 3.0;
+        }
+        if self.ping.history_size == 0 {
+            self.ping.history_size = 300;
+        }
+        if self.ping.packet_size == 0 {
+            self.ping.packet_size = 32;
+        }
+        if self.ui.refresh_rate == 0 {
+            self.ui.refresh_rate = 100;
+        }
+    }
+
     pub fn set_interval(&mut self, interval: f64) {
         self.ping.interval = interval;
     }
 
     pub fn enabled_hosts(&self) -> impl Iterator<Item = &Host> {
         self.hosts.iter().filter(|h| h.enabled)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_config_has_hosts() {
+        let c = Config::default();
+        assert!(!c.hosts.is_empty());
+        assert_eq!(c.ping.portal_check_url, "http://captive.apple.com");
+    }
+
+    #[test]
+    fn add_host_names_ipv4() {
+        let mut c = Config {
+            ping: Config::default().ping,
+            hosts: vec![],
+            ui: Config::default().ui,
+        };
+        c.add_host("8.8.8.8".to_string());
+        assert_eq!(c.hosts[0].name, "IP 8.8.8.8");
+    }
+
+    #[test]
+    fn add_host_keeps_hostname_and_ipv6() {
+        let mut c = Config {
+            ping: Config::default().ping,
+            hosts: vec![],
+            ui: Config::default().ui,
+        };
+        c.add_host("example.com".to_string());
+        c.add_host("2606:4700:4700::1111".to_string());
+        assert_eq!(c.hosts[0].name, "example.com");
+        // IPv6 must NOT be misclassified/renamed oddly; name == address is fine.
+        assert_eq!(c.hosts[1].name, "2606:4700:4700::1111");
+    }
+
+    #[test]
+    fn validate_clamps_absurd_values() {
+        let mut c = Config::default();
+        c.ping.interval = 0.0;
+        c.ping.timeout = 0.0;
+        c.ping.history_size = 0;
+        c.validate();
+        assert!(c.ping.interval >= 0.1);
+        assert!(c.ping.timeout >= 0.1);
+        assert!(c.ping.history_size >= 1);
     }
 }
