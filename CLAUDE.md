@@ -21,12 +21,12 @@ The application uses an async event-driven architecture:
 1. PingEngine spawns async tasks per enabled host
 2. Each task sends PingEvent messages through mpsc channels
 3. App coordinates between ping events and UI updates via tokio::select!
-4. Stats are maintained in Arc<RwLock<HashMap>> for thread-safe access
+4. App owns all state (stats, resolution status, portal result) in a single task; ping and probe tasks communicate only through channels, so no shared locks are needed
 5. TUI renders stats at configurable refresh intervals
 
 ### Host Management
 - Hosts are identified by deterministic UUIDs (uuid::Uuid::new_v5)
-- DNS resolution happens per ping loop for dynamic IP handling
+- DNS is resolved once per connection attempt and re-resolved after sustained ping failures, handling IP changes and reconnects
 - Individual hosts can override global ping intervals
 - Host state is managed through enabled/disabled flags
 
@@ -58,17 +58,20 @@ cargo fmt            # Code formatting
 ## Configuration
 
 The application uses TOML configuration files (default: `pingpong.toml`):
-- **ping**: interval, timeout, history_size, packet_size
+- **ping**: interval, timeout, history_size, packet_size, portal_check_url
 - **ui**: refresh_rate, theme, show_details, graph_height
 - **hosts**: array of {name, address, enabled, interval?}
 
 CLI arguments override config file settings.
 
 ### Animation System
-The application features three visual modes selected randomly on startup or via CLI:
+The application features six visual modes selected randomly on startup or via CLI:
 - **Plasma**: Dynamic energy fields with interference patterns responding to network performance
 - **Globe**: Rotating Earth showing continents, oceans, and clouds with global network theme
 - **Bounce**: Classic screensaver-style bouncing RTT text with trail effects
+- **Matrix**: Green "digital rain" of cascading characters
+- **Dna**: Rotating double-helix of data packets
+- **Waveform**: Oscilloscope-style pulse of the connection
 
 Use `--animation <type>` to force a specific mode, otherwise random selection occurs.
 

@@ -10,6 +10,8 @@ timeout = 3.0
 history_size = 300
 # Packet size in bytes (smaller = less bandwidth usage)
 packet_size = 32
+# URL used to detect captive portals (plain HTTP only). Default: http://captive.apple.com
+portal_check_url = "http://captive.apple.com"
 
 [ui]
 # UI refresh rate in milliseconds (lower = smoother, higher = less CPU)
