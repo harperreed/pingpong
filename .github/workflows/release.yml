@@ -35,23 +35,23 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary-name: pingpong
+            binary-name: pingpong-rs
             asset-name: pingpong-linux-x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            binary-name: pingpong
+            binary-name: pingpong-rs
             asset-name: pingpong-linux-x86_64-musl
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary-name: pingpong
+            binary-name: pingpong-rs
             asset-name: pingpong-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary-name: pingpong
+            binary-name: pingpong-rs
             asset-name: pingpong-macos-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary-name: pingpong.exe
+            binary-name: pingpong-rs.exe
             asset-name: pingpong-windows-x86_64.exe
 
     steps:
@@ -84,6 +84,9 @@ jobs:
           asset_content_type: application/octet-stream
 
       - name: Publish to crates.io
+        # The crate source is platform-independent, so publish from a single
+        # matrix job to avoid parallel jobs racing to push the same version.
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
         uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}

@@ -45,19 +45,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary-name: pingpong
+            binary-name: pingpong-rs
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
-            binary-name: pingpong
+            binary-name: pingpong-rs
           - os: macos-latest
             target: x86_64-apple-darwin
-            binary-name: pingpong
+            binary-name: pingpong-rs
           - os: macos-latest
             target: aarch64-apple-darwin
-            binary-name: pingpong
+            binary-name: pingpong-rs
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary-name: pingpong.exe
+            binary-name: pingpong-rs.exe
 
     steps:
       - uses: actions/checkout@v4
