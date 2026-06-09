@@ -4,22 +4,60 @@
 use chrono::{DateTime, Local, TimeZone, Utc};
 use chrono_tz::US::Central;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
+    },
 };
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, Paragraph, Sparkline},
     Frame, Terminal,
 };
 use std::collections::HashMap;
 use std::io;
+use std::io::Write as _;
 use std::time::{Duration, Instant};
 
 use crate::stats::PingStats;
+use crate::status::HostState;
+
+/// Put the terminal into TUI mode: raw mode, alternate screen, save title.
+pub fn terminal_enter() -> anyhow::Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    // If any setup step fails after raw mode is on, roll the terminal back
+    // (terminal_leave is idempotent) so we never leave the user in raw mode.
+    let res: anyhow::Result<()> = (|| {
+        write!(stdout, "\x1b[22;2t")?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+        stdout.flush()?;
+        Ok(())
+    })();
+    if res.is_err() {
+        terminal_leave();
+    }
+    res
+}
+
+/// Restore the terminal: leave alt screen, disable raw mode, restore title, show cursor.
+/// Safe to call multiple times; all errors are ignored so it can run from a panic hook.
+pub fn terminal_leave() {
+    let mut stdout = io::stdout();
+    let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+    let _ = disable_raw_mode();
+    let _ = write!(stdout, "\x1b[23;2t");
+    let _ = execute!(stdout, crossterm::cursor::Show);
+    let _ = stdout.flush();
+}
+
+/// Smallest safe step for `Iterator::step_by` (which panics on 0).
+fn safe_step(n: usize) -> usize {
+    n.max(1)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationType {
@@ -47,11 +85,81 @@ impl AnimationType {
     }
 }
 
+// Color palette the renderer applies to status text and graphs.
+#[derive(Debug, Clone, Copy)]
+pub struct Theme {
+    // fg is part of the palette; unused by the renderer.
+    #[allow(dead_code)]
+    pub fg: Color,
+    pub accent: Color,
+    pub good: Color,
+    pub warn: Color,
+    pub bad: Color,
+    pub dim: Color,
+}
+
+impl Theme {
+    // Returns the standard dark-background palette.
+    pub fn dark() -> Self {
+        Self {
+            fg: Color::Green,
+            accent: Color::Cyan,
+            good: Color::Green,
+            warn: Color::Yellow,
+            bad: Color::Red,
+            dim: Color::DarkGray,
+        }
+    }
+    // Returns the standard light-background palette.
+    pub fn light() -> Self {
+        Self {
+            fg: Color::Black,
+            accent: Color::Blue,
+            good: Color::Green,
+            warn: Color::Rgb(180, 120, 0),
+            bad: Color::Red,
+            dim: Color::Gray,
+        }
+    }
+    // Resolves a config theme name (dark/light/auto) into a concrete palette.
+    pub fn from_name(name: &str) -> Self {
+        match name {
+            "light" => Self::light(),
+            "dark" => Self::dark(),
+            _ => {
+                // auto: COLORFGBG like "0;15" (fg=0, bg=15 >= 7) => light background -> light theme
+                match std::env::var("COLORFGBG")
+                    .ok()
+                    .and_then(|v| v.rsplit(';').next().map(|s| s.to_string()))
+                {
+                    Some(bg) if bg.trim().parse::<u8>().map(|n| n >= 7).unwrap_or(false) => {
+                        Self::light()
+                    }
+                    _ => Self::dark(),
+                }
+            }
+        }
+    }
+    // Cycles through dark → light → auto and wraps back to dark.
+    pub fn cycle_name(name: &str) -> &'static str {
+        match name {
+            "dark" => "light",
+            "light" => "auto",
+            _ => "dark",
+        }
+    }
+}
+
+// Per-frame render inputs the main view reads: palette, detail toggle, graph height, banner, and per-host states.
+pub struct RenderOpts {
+    pub theme: Theme,
+    pub show_details: bool,
+    pub graph_height: u16,
+    pub banner: Option<String>, // connectivity banner text (portal/offline)
+    pub host_states: Vec<(String, HostState)>, // (host_id, state)
+}
+
 pub struct TuiState {
-    #[allow(dead_code)]
-    pub selected_tab: usize,
-    #[allow(dead_code)]
-    pub selected_host: usize,
     pub show_help: bool,
     pub paused: bool,
     pub animation_frame: usize,
@@ -66,13 +174,15 @@ pub struct TuiState {
     pub chicago_time: DateTime<chrono_tz::Tz>,
     pub use_24_hour_format: bool,
     pub show_lore: bool,
+    pub theme_name: String,
+    pub show_details: bool,
+    // Stored from config; the renderer reads graph height from RenderOpts, not this field.
+    #[allow(dead_code)]
+    pub graph_height: u16,
 }
 
 impl TuiState {
     pub fn with_animation(animation_type: AnimationType) -> Self {
-        // Debug: Log which animation was selected
-        eprintln!("🎨 Selected animation: {:?}", animation_type);
-
         let (bounce_dx, bounce_dy) = match animation_type {
             AnimationType::BouncingLogo => (1.5, 1.2), // Initial velocity
             _ => (0.0, 0.0),
@@ -83,8 +193,6 @@ impl TuiState {
         let chicago_now = Central.from_utc_datetime(&Utc::now().naive_utc());
 
         Self {
-            selected_tab: 0,
-            selected_host: 0,
             show_help: false,
             paused: false,
             animation_frame: 0,
@@ -99,6 +207,9 @@ impl TuiState {
             chicago_time: chicago_now,
             use_24_hour_format: true,
             show_lore: true,
+            theme_name: "auto".into(),
+            show_details: true,
+            graph_height: 10,
         }
     }
 
@@ -143,12 +254,9 @@ pub struct TuiApp {
 
 impl TuiApp {
     pub async fn new(animation_type: Option<AnimationType>) -> anyhow::Result<Self> {
-        // Setup terminal
-        enable_raw_mode()?;
-        let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend)?;
+        terminal_enter()?;
+        let backend = CrosstermBackend::new(io::stdout());
+        let terminal = Terminal::new(backend).inspect_err(|_| terminal_leave())?;
 
         let state = if let Some(anim_type) = animation_type {
             TuiState::with_animation(anim_type)
@@ -167,7 +275,31 @@ impl TuiApp {
         self.host_info = host_info;
     }
 
-    pub async fn draw(&mut self, stats: &HashMap<String, PingStats>) -> anyhow::Result<()> {
+    // Pushes theme/detail/graph-height settings from app config into render state.
+    pub fn set_ui_config(&mut self, theme_name: String, show_details: bool, graph_height: u16) {
+        self.state.theme_name = theme_name;
+        self.state.show_details = show_details;
+        self.state.graph_height = graph_height;
+    }
+
+    pub fn theme_name(&self) -> &str {
+        &self.state.theme_name
+    }
+
+    pub fn show_details(&self) -> bool {
+        self.state.show_details
+    }
+
+    /// Sets the terminal window/tab title.
+    pub fn set_title(&self, title: &str) {
+        let _ = execute!(io::stdout(), SetTitle(title));
+    }
+
+    pub async fn draw(
+        &mut self,
+        stats: &HashMap<String, PingStats>,
+        opts: &RenderOpts,
+    ) -> anyhow::Result<()> {
         let host_info = self.host_info.clone();
         let show_help = self.state.show_help;
 
@@ -215,6 +347,7 @@ impl TuiApp {
                     chicago_time,
                     use_24_hour,
                     show_lore,
+                    opts,
                 );
             }
         })?;
@@ -225,6 +358,10 @@ impl TuiApp {
         if event::poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Ok(true); // Ctrl-C quits (raw mode swallows SIGINT)
+                    }
+                    KeyCode::Esc => return Ok(true),
                     KeyCode::Char('q') => return Ok(true), // Quit
                     KeyCode::Char('h') | KeyCode::F(1) => {
                         self.state.show_help = !self.state.show_help;
@@ -240,6 +377,13 @@ impl TuiApp {
                     }
                     KeyCode::Char('l') => {
                         self.state.toggle_lore_visibility();
+                    }
+                    KeyCode::Char('t') => {
+                        let next = Theme::cycle_name(&self.state.theme_name).to_string();
+                        self.state.theme_name = next;
+                    }
+                    KeyCode::Char('d') => {
+                        self.state.show_details = !self.state.show_details;
                     }
                     _ => {}
                 }
@@ -285,14 +429,35 @@ fn render_main(
     chicago_time: DateTime<chrono_tz::Tz>,
     use_24_hour: bool,
     show_lore: bool,
+    opts: &RenderOpts,
 ) {
     let size = f.area();
+
+    // When a connectivity banner is present, reserve a 1-row strip above everything.
+    let (banner_area, body_area) = if opts.banner.is_some() {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(1), Constraint::Min(0)])
+            .split(size);
+        (Some(chunks[0]), chunks[1])
+    } else {
+        (None, size)
+    };
+
+    if let (Some(area), Some(text)) = (banner_area, opts.banner.as_ref()) {
+        let p = Paragraph::new(text.clone()).style(
+            Style::default()
+                .fg(opts.theme.warn)
+                .add_modifier(Modifier::BOLD),
+        );
+        f.render_widget(p, area);
+    }
 
     // Create layout with status bar at bottom
     let outer_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(0), Constraint::Length(3)])
-        .split(size);
+        .split(body_area);
 
     // Create 4-window layout: left side split top/bottom, right side single window
     let main_chunks = Layout::default()
@@ -304,7 +469,10 @@ fn render_main(
     if show_lore {
         // Calculate dynamic split based on number of hosts (more hosts = more space for pings)
         let host_count = host_info.len();
-        let ping_percentage = std::cmp::min(80, 40 + (host_count * 8)); // 40% base + 8% per host, max 80%
+        let ping_percentage = std::cmp::min(
+            80usize,
+            40usize.saturating_add(host_count.saturating_mul(8)),
+        ); // 40% base + 8% per host, max 80%
         let lore_percentage = 100 - ping_percentage;
 
         let left_chunks = Layout::default()
@@ -316,13 +484,13 @@ fn render_main(
             .split(main_chunks[0]);
 
         // Render pings window (top left)
-        render_pings_window(f, left_chunks[0], stats, host_info);
+        render_pings_window(f, left_chunks[0], stats, host_info, opts);
 
         // Render lore window (bottom left)
         render_lore_window(f, left_chunks[1], animation_type);
     } else {
         // Render pings window taking full left side
-        render_pings_window(f, main_chunks[0], stats, host_info);
+        render_pings_window(f, main_chunks[0], stats, host_info, opts);
     }
 
     // Render animation (right side)
@@ -345,69 +513,72 @@ fn render_pings_window(
     area: Rect,
     stats: &HashMap<String, PingStats>,
     host_info: &[(String, String)],
+    opts: &RenderOpts,
 ) {
-    let mut text = String::new();
-    text.push_str("🏓 Network Monitor\n");
-    text.push_str("═══════════════════════════════════════════════\n\n");
+    let outer = Block::default()
+        .borders(Borders::ALL)
+        .title(" Network Status ");
+    let inner = outer.inner(area);
+    f.render_widget(outer, area);
 
-    for (i, (host_id, host_name)) in host_info.iter().enumerate() {
-        if let Some(stat) = stats.get(host_id) {
-            let quality = stat.connection_quality();
-            let rtt_stats = stat.rtt_stats();
-            let loss = stat.packet_loss_percent();
-
-            text.push_str(&format!(
-                "{} {} {}\n",
-                quality.symbol(),
-                host_name,
-                "─".repeat(35 - host_name.len().min(25))
-            ));
-            text.push_str(&format!(
-                "   RTT: {:.1}ms (avg) | Loss: {:.1}% | Pings: {}\n",
-                rtt_stats.avg.as_secs_f64() * 1000.0,
-                loss,
-                stat.total_pings()
-            ));
-
-            // Add status indicator bar
-            let status_bar = if loss < 1.0 && rtt_stats.avg.as_millis() < 100 {
-                "   Status: ████████████ EXCELLENT"
-            } else if loss < 5.0 && rtt_stats.avg.as_millis() < 200 {
-                "   Status: ████████▓▓▓▓ GOOD"
-            } else if loss < 10.0 && rtt_stats.avg.as_millis() < 500 {
-                "   Status: ██████▓▓▓▓▓▓ FAIR"
-            } else {
-                "   Status: ████▓▓▓▓▓▓▓▓ POOR"
-            };
-            text.push_str(&format!("{}\n", status_bar));
-        } else {
-            text.push_str(&format!(
-                "● {} {}\n",
-                host_name,
-                "─".repeat(35 - host_name.len().min(25))
-            ));
-            text.push_str("   Status: ░░░░░░░░░░░░ WAITING\n");
-        }
-
-        // Add separator line between hosts (except last one)
-        if i < host_info.len() - 1 {
-            text.push_str("───────────────────────────────────────────────\n");
-        }
-        text.push('\n');
+    if host_info.is_empty() {
+        return;
     }
 
-    text.push_str("Controls: 'q' quit | 'h' help | 'space' pause | 'v' cycle viz | 'p' toggle time | 'l' toggle lore");
+    // Each host row: a 2-line header plus (when details are on) a sparkline.
+    let graph_h = if opts.show_details {
+        opts.graph_height.max(1)
+    } else {
+        0
+    };
+    let per_host = 2u16.saturating_add(graph_h);
+    let constraints: Vec<Constraint> = host_info
+        .iter()
+        .map(|_| Constraint::Length(per_host))
+        .collect();
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(inner);
 
-    let paragraph = Paragraph::new(text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Network Status "),
-        )
-        .style(Style::default().fg(Color::Green))
-        .alignment(Alignment::Left);
+    for (row, (host_id, host_name)) in rows.iter().zip(host_info.iter()) {
+        let state = opts
+            .host_states
+            .iter()
+            .find(|(id, _)| id == host_id)
+            .map(|(_, s)| s.clone());
+        let (symbol, color, detail) = match &state {
+            Some(HostState::Up { rtt_ms }) => {
+                ("\u{25cf}", opts.theme.good, format!("{rtt_ms:.0}ms"))
+            }
+            Some(HostState::Degraded { loss_pct }) => {
+                ("\u{25d0}", opts.theme.warn, format!("{loss_pct:.0}% loss"))
+            }
+            Some(HostState::Down { reason }) => {
+                ("\u{2717}", opts.theme.bad, format!("down: {reason}"))
+            }
+            _ => ("\u{25cb}", opts.theme.dim, "resolving\u{2026}".to_string()),
+        };
 
-    f.render_widget(paragraph, area);
+        let sub = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(2), Constraint::Min(0)])
+            .split(*row);
+
+        let header = Paragraph::new(format!("{symbol} {host_name}\n   {detail}"))
+            .style(Style::default().fg(color));
+        f.render_widget(header, sub[0]);
+
+        if opts.show_details {
+            if let Some(stat) = stats.get(host_id) {
+                // Option<u64> preserves gaps (None) for timeouts/errors.
+                let spark = Sparkline::default()
+                    .data(stat.rtt_history_for_graph(sub[1].width as usize))
+                    .style(Style::default().fg(opts.theme.accent));
+                f.render_widget(spark, sub[1]);
+            }
+        }
+    }
 }
 
 fn render_lore_window(f: &mut Frame, area: Rect, animation_type: AnimationType) {
@@ -594,7 +765,7 @@ fn render_animation_window(
     // Overlay flashing red X for connection failures
     if has_connection_failure {
         // Flash every 0.5 seconds
-        let flash_on = ((animation_time * 2.0) as usize % 2) == 0;
+        let flash_on = ((animation_time * 2.0) as usize).is_multiple_of(2);
         if flash_on {
             animation_art = generate_connection_failure_overlay(
                 animation_art,
@@ -711,9 +882,9 @@ fn generate_plasma_animation(time: f64, width: usize, height: usize) -> String {
             let base_char = plasma_layers[layer_choice][char_index];
 
             // Add special effects for high intensity areas
-            let char_to_use = if intensity > 2.0 && (x + y + time_int) % 7 == 0 {
+            let char_to_use = if intensity > 2.0 && (x + y + time_int).is_multiple_of(7) {
                 fx_chars[time_int % fx_chars.len()]
-            } else if intensity > 1.5 && (x * 2 + y + time_int / 2) % 11 == 0 {
+            } else if intensity > 1.5 && (x * 2 + y + time_int / 2).is_multiple_of(11) {
                 fx_chars[(time_int / 2) % fx_chars.len()]
             } else {
                 base_char
@@ -852,7 +1023,7 @@ fn generate_globe_animation(time: f64, width: usize, height: usize) -> String {
                         continent_layers[terrain_type][elevation]
                     } else {
                         // Nighttime - show city lights occasionally
-                        if elevation > 4 && (x + y + (time * 2.0) as usize) % 12 == 0 {
+                        if elevation > 4 && (x + y + (time * 2.0) as usize).is_multiple_of(12) {
                             '●' // City lights
                         } else {
                             '▓' // Darker land
@@ -891,9 +1062,9 @@ fn generate_globe_animation(time: f64, width: usize, height: usize) -> String {
             } else {
                 // Deep space with twinkling stars and satellites
                 let star_seed = x * 17 + y * 23 + (time * 1.25) as usize;
-                let char_to_use = if star_seed % 25 == 0 {
+                let char_to_use = if star_seed.is_multiple_of(25) {
                     star_chars[star_seed % star_chars.len()]
-                } else if star_seed % 47 == 0 && (time * 1.0) as usize % 15 < 3 {
+                } else if star_seed.is_multiple_of(47) && (time * 1.0) as usize % 15 < 3 {
                     '🛰' // Occasional satellite
                 } else {
                     ' '
@@ -1129,7 +1300,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
         // Add occasional static characters (residual code) - much more stable
         if !has_stream && (column_base_seed % 23) < 3 {
-            let static_y = (column_base_seed / 5) % effective_height;
+            let static_y = (column_base_seed / 5) % effective_height.max(1);
             let static_char =
                 matrix_chars[(column_base_seed * 7 + time_factor / 10) % matrix_chars.len()];
 
@@ -1154,8 +1325,10 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
         for _ in 0..num_glitches {
             // More stable glitch positions - less random jumping
-            let glitch_x = ((time * 3.0) as usize * 7 + effective_width / 3) % effective_width;
-            let glitch_y = ((time * 2.0) as usize * 11 + effective_height / 4) % effective_height;
+            let glitch_x =
+                ((time * 3.0) as usize * 7 + effective_width / 3) % effective_width.max(1);
+            let glitch_y =
+                ((time * 2.0) as usize * 11 + effective_height / 4) % effective_height.max(1);
 
             if glitch_y < result.len() {
                 let mut chars: Vec<char> = result[glitch_y].chars().collect();
@@ -1304,8 +1477,8 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
         let num_mutations = (effective_height as f64 * mutation_rate) as usize;
 
         for _ in 0..num_mutations {
-            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height;
-            let x = rand::random::<usize>() % effective_width;
+            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height.max(1);
+            let x = rand::random::<usize>() % effective_width.max(1);
 
             if y < result.len() {
                 let mut chars: Vec<char> = result[y].chars().collect();
@@ -1414,10 +1587,10 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
     }
 
     // Add network quality indicators as scope grid
-    for y in (0..effective_height).step_by(effective_height / 4) {
+    for y in (0..effective_height).step_by(safe_step(effective_height / 4)) {
         if y < result.len() {
             let mut chars: Vec<char> = result[y].chars().collect();
-            for x in (0..effective_width).step_by(effective_width / 8) {
+            for x in (0..effective_width).step_by(safe_step(effective_width / 8)) {
                 if x < chars.len() && chars[x] == ' ' {
                     chars[x] = '·';
                 }
@@ -1625,16 +1798,20 @@ fn render_help(f: &mut Frame) {
         "",
         "CONTROLS:",
         "  Space       - Pause/resume pings",
-        "  q           - Quit application",
+        "  q / Esc     - Quit application",
+        "  Ctrl-C      - Quit application",
         "  h / F1      - Toggle this help",
         "  v           - Cycle through visualizations",
         "  p           - Toggle 12/24 hour time format",
         "  l           - Toggle lore window visibility",
+        "  d           - Toggle per-host detail graphs",
+        "  t           - Cycle color theme (dark/light/auto)",
         "",
         "INDICATORS:",
-        "  ●           - Good connection (< 2% loss, < 100ms)",
-        "  ◐           - Fair connection (< 10% loss, < 500ms)",
-        "  ○           - Poor connection (> 10% loss or > 500ms)",
+        "  \u{25cf}           - Host up (healthy)",
+        "  \u{25d0}           - Host degraded (packet loss)",
+        "  \u{2717}           - Host down",
+        "  \u{25cb}           - Resolving / waiting",
         "",
         "Press 'h' or F1 to close this help",
     ];
@@ -1681,12 +1858,19 @@ fn render_status_bar(
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = execute!(
-            self.terminal.backend_mut(),
-            LeaveAlternateScreen,
-            DisableMouseCapture
-        );
-        let _ = self.terminal.show_cursor();
+        terminal_leave();
+    }
+}
+
+#[cfg(test)]
+mod theme_tests {
+    use super::*;
+    #[test]
+    fn cycle_wraps() {
+        assert_eq!(Theme::cycle_name("dark"), "light");
+        assert_eq!(Theme::cycle_name("light"), "auto");
+        assert_eq!(Theme::cycle_name("auto"), "dark");
+        // unknown/empty names fall back to "dark" (the _ arm)
+        assert_eq!(Theme::cycle_name(""), "dark");
     }
 }
