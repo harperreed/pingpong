@@ -1,0 +1,43 @@
+# ABOUTME: GoReleaser config building macOS binaries for pingpong and
+# ABOUTME: publishing its Homebrew formula to harperreed/homebrew-tap.
+version: 2
+
+project_name: pingpong
+
+builds:
+  - id: pingpong
+    builder: rust
+    binary: pingpong
+    tool: cargo
+    flags:
+      - --release
+    targets:
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
+
+archives:
+  - id: pingpong
+    formats: [tar.gz]
+    # GoReleaser renders Go-style arch (amd64/arm64); map amd64 -> x86_64 to
+    # match the existing tap asset names (Darwin_x86_64 / Darwin_arm64).
+    name_template: 'pingpong_{{ .Version }}_Darwin_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}'
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: pingpong
+    repository:
+      owner: harperreed
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/harperreed/pingpong"
+    description: "A beautiful TUI ping utility for monitoring network connectivity"
+    license: "MIT"
+    test: |
+      system "#{bin}/pingpong", "--help"
+
+release:
+  github:
+    owner: harperreed
+    name: pingpong
