@@ -90,3 +90,57 @@ jobs:
         uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish-homebrew:
+    name: Publish Homebrew Formula
+    needs: build-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download macOS release assets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          gh release download "$GITHUB_REF_NAME" --pattern 'pingpong-macos-*' --dir dist
+
+      - name: Check Homebrew tap token
+        env:
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$TAP_GITHUB_TOKEN" ]; then
+            echo "TAP_GITHUB_TOKEN secret is required to push Formula/pingpong.rb to harperreed/homebrew-tap."
+            exit 1
+          fi
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: harperreed/homebrew-tap
+          token: ${{ secrets.TAP_GITHUB_TOKEN }}
+          path: homebrew-tap
+
+      - name: Generate Homebrew formula
+        env:
+          TAP_REPO_PATH: homebrew-tap
+          RELEASE_REPOSITORY: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_VERSION: ${{ github.ref_name }}
+          INTEL_ASSET_PATH: dist/pingpong-macos-x86_64
+          ARM_ASSET_PATH: dist/pingpong-macos-aarch64
+        run: |
+          RELEASE_VERSION="${RELEASE_VERSION#v}" scripts/update-homebrew-formula.sh
+
+      - name: Commit Homebrew formula
+        working-directory: homebrew-tap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/pingpong.rb
+          if git diff --cached --quiet; then
+            echo "Formula is already up to date"
+            exit 0
+          fi
+          git commit -m "Update pingpong to ${GITHUB_REF_NAME}"
+          git push
