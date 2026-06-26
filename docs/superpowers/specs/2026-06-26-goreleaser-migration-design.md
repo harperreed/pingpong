@@ -114,6 +114,9 @@ builds:
     builder: rust
     binary: pingpong
     tool: cargo
+    # The Rust builder's `command` defaults to `zigbuild`; force plain
+    # `cargo build` so no cargo-zigbuild/zig toolchain is needed on the runner.
+    command: build
     flags:
       - --release
     targets:

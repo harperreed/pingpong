@@ -9,6 +9,10 @@ builds:
     builder: rust
     binary: pingpong
     tool: cargo
+    # The Rust builder's `command` defaults to `zigbuild` (cargo-zigbuild),
+    # which is not installed on the macOS CI runner. Force plain `cargo build`
+    # — the macOS-only, native-toolchain path this pipeline is scoped to.
+    command: build
     flags:
       - --release
     targets:
