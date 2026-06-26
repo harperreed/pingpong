@@ -35,6 +35,9 @@ brews:
       owner: harperreed
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    # Homebrew ignores a root-level formula when a Formula/ dir exists, and the
+    # rest of the tap lives in Formula/. Match it so `brew install` resolves.
+    directory: Formula
     homepage: "https://github.com/harperreed/pingpong"
     description: "A beautiful TUI ping utility for monitoring network connectivity"
     license: "MIT"

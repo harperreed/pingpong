@@ -139,6 +139,9 @@ brews:
       owner: harperreed
       name: homebrew-tap
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    # Match the rest of the tap (Formula/); brew ignores root formulae when a
+    # Formula/ dir exists.
+    directory: Formula
     homepage: "https://github.com/harperreed/pingpong"
     description: "A beautiful TUI ping utility for monitoring network connectivity"
     license: "MIT"
