@@ -5,142 +5,47 @@ on:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
 
 jobs:
-  create-release:
-    name: Create Release
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+  goreleaser:
+    name: GoReleaser (macOS)
+    runs-on: macos-latest
     steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin, aarch64-apple-darwin
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          # brews: (Formula generation) is hard-deprecated as of GoReleaser
+          # v2.16; pin to the 2.16.x line so a future release that removes it
+          # cannot silently break the tap. Bump deliberately when migrating
+          # the tap to homebrew_casks.
+          version: '~> v2.16.0'
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
-          draft: false
-          prerelease: false
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 
-  build-release:
-    name: Build Release (${{ matrix.target }})
-    needs: create-release
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            binary-name: pingpong-rs
-            asset-name: pingpong-linux-x86_64
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-            binary-name: pingpong-rs
-            asset-name: pingpong-linux-x86_64-musl
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            binary-name: pingpong-rs
-            asset-name: pingpong-macos-x86_64
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            binary-name: pingpong-rs
-            asset-name: pingpong-macos-aarch64
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary-name: pingpong-rs.exe
-            asset-name: pingpong-windows-x86_64.exe
-
+  publish-crate:
+    name: Publish to crates.io
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install musl-tools (Linux musl only)
-        if: matrix.target == 'x86_64-unknown-linux-musl'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-      - name: Build binary
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Strip binary (Unix only)
-        if: matrix.os != 'windows-latest'
-        run: strip target/${{ matrix.target }}/release/${{ matrix.binary-name }}
-
-      - name: Upload Release Asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
-          asset_path: target/${{ matrix.target }}/release/${{ matrix.binary-name }}
-          asset_name: ${{ matrix.asset-name }}
-          asset_content_type: application/octet-stream
 
       - name: Publish to crates.io
-        # The crate source is platform-independent, so publish from a single
-        # matrix job to avoid parallel jobs racing to push the same version.
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         uses: katyo/publish-crates@v2
         with:
           registry-token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  publish-homebrew:
-    name: Publish Homebrew Formula
-    needs: build-release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download macOS release assets
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          mkdir -p dist
-          gh release download "$GITHUB_REF_NAME" --pattern 'pingpong-macos-*' --dir dist
-
-      - name: Check Homebrew tap token
-        env:
-          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-        run: |
-          if [ -z "$TAP_GITHUB_TOKEN" ]; then
-            echo "TAP_GITHUB_TOKEN secret is required to push Formula/pingpong.rb to harperreed/homebrew-tap."
-            exit 1
-          fi
-
-      - name: Checkout Homebrew tap
-        uses: actions/checkout@v4
-        with:
-          repository: harperreed/homebrew-tap
-          token: ${{ secrets.TAP_GITHUB_TOKEN }}
-          path: homebrew-tap
-
-      - name: Generate Homebrew formula
-        env:
-          TAP_REPO_PATH: homebrew-tap
-          RELEASE_REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_VERSION: ${{ github.ref_name }}
-          INTEL_ASSET_PATH: dist/pingpong-macos-x86_64
-          ARM_ASSET_PATH: dist/pingpong-macos-aarch64
-        run: |
-          RELEASE_VERSION="${RELEASE_VERSION#v}" scripts/update-homebrew-formula.sh
-
-      - name: Commit Homebrew formula
-        working-directory: homebrew-tap
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/pingpong.rb
-          if git diff --cached --quiet; then
-            echo "Formula is already up to date"
-            exit 0
-          fi
-          git commit -m "Update pingpong to ${GITHUB_REF_NAME}"
-          git push
