@@ -12,7 +12,7 @@
 
 Copied verbatim from the design spec. Every task implicitly includes these.
 
-- GoReleaser distribution is `goreleaser` (open-source), version constraint `~> v2`. The Rust builder is stable since v2.5.
+- GoReleaser distribution is `goreleaser` (open-source). The Rust builder is stable since v2.5. **The GoReleaser version is pinned to `~> v2.16.0`** (the 2.16.x patch line), not floating `~> v2`: the `brews:` Formula key is hard-deprecated as of v2.16, so a floating constraint would eventually pull a release that removes it and silently re-break the tap. User decision (2026-06-26): keep the Formula and pin the version; defer any tap→`homebrew_casks` (Cask) migration to a separate, deliberate effort.
 - Release is **macOS-only**: targets `x86_64-apple-darwin` and `aarch64-apple-darwin`. No Linux/Windows release binaries.
 - Build tool is native **`cargo`** (no zig / cargo-zigbuild).
 - The binary/command name is **`pingpong`** everywhere (cargo build, cargo install, brew). The crate name on crates.io stays `pingpong-rs` (`[package].name`, unchanged).
@@ -236,7 +236,7 @@ git commit -m "ci: add GoReleaser config for macOS build and Homebrew formula"
 
 ### Task 3: Rewrite `release.yml` and delete the formula script
 
-Replace the entire release workflow with the two-job GoReleaser pipeline and remove the now-dead hand-rolled formula script.
+Replace the entire release workflow with the two-job GoReleaser pipeline and remove the now-dead hand-rolled formula script. The GoReleaser version is pinned to the 2.16.x line (not floating `~> v2`) because the `brews:` Formula key is hard-deprecated as of v2.16; pinning prevents a future GoReleaser release from silently removing it and re-breaking the tap.
 
 **Files:**
 - Rewrite: `.github/workflows/release.yml`
@@ -276,7 +276,11 @@ jobs:
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: '~> v2'
+          # brews: (Formula generation) is hard-deprecated as of GoReleaser
+          # v2.16; pin to the 2.16.x line so a future release that removes it
+          # cannot silently break the tap. Bump deliberately when migrating
+          # the tap to homebrew_casks.
+          version: '~> v2.16.0'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -209,3 +209,21 @@ command has always been `pingpong` everywhere else.
 - **First release is the real test.** The `publish-homebrew` path cannot be fully
   exercised without a tag; the `--snapshot` dry run + formula diff de-risk it as
   far as possible beforehand.
+
+## Update (2026-06-26): `brews` deprecation
+
+During implementation, the local snapshot revealed that GoReleaser **hard-deprecated
+the `brews:` key as of v2.16** (soft since v2.10). Its replacement, `homebrew_casks`,
+generates a Homebrew **Cask**, not a Formula. The snapshot confirmed `brews:` still
+works in v2.16 and produces a `pingpong.rb` matching `toki.rb`'s shape exactly, but a
+floating `version: '~> v2'` would eventually pull a GoReleaser release that removes
+`brews:` and silently re-break the tap — the exact failure this migration exists to fix.
+
+**Decision (user-approved):** keep the Formula (`brews:`) and **pin the GoReleaser
+version to `~> v2.16.0`** (the 2.16.x patch line) in `release.yml`, rather than switch
+to a Cask. Rationale: a Cask would make pingpong the lone Cask in an all-Formula tap
+and, because the binary is unsigned/un-notarized, would require a post-install hook to
+clear Gatekeeper quarantine — friction a Formula avoids. Migrating the whole tap to
+`homebrew_casks` (with signing/notarization) is left as a separate, deliberate effort.
+The release pipeline never runs `goreleaser check`, so that command's non-zero exit on
+the deprecation does not affect the pipeline.
