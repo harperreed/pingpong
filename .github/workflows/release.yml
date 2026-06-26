@@ -39,6 +39,11 @@ jobs:
   publish-crate:
     name: Publish to crates.io
     runs-on: ubuntu-latest
+    # Wait for the GitHub release + Homebrew formula before publishing to
+    # crates.io: a crates.io publish is irreversible, so it must be the last
+    # step. If GoReleaser fails, the crate is never published and the release
+    # can be retried on the same tag.
+    needs: goreleaser
     steps:
       - uses: actions/checkout@v4
 
