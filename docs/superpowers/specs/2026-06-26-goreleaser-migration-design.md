@@ -81,7 +81,8 @@ The pipeline triggers on `push: tags: 'v*'` and runs two independent jobs.
 2. `dtolnay/rust-toolchain@stable` and add the `x86_64-apple-darwin` target
    (the runner is arm64; cross to x86_64 mac is native via the Apple toolchain).
 3. `goreleaser/goreleaser-action@v6` with `distribution: goreleaser` (the
-   open-source build, not Pro), `version: '~> v2'`, args `release --clean`.
+   open-source build, not Pro), `version: '~> v2.16.0'` (pinned — see the
+   "Update (2026-06-26)" section below), args `release --clean`.
 
 GoReleaser then, driven by `.goreleaser.yaml`:
 - builds the two darwin binaries with native `cargo`,
