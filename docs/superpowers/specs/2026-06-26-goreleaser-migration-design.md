@@ -41,8 +41,11 @@ with the rest of the tap and producing a working Homebrew formula.
 - **No Linux or Windows release binaries.** Scoped out per decision below. The
   Homebrew formula is macOS-only (matching the existing tap formulae), and
   non-mac users install via `cargo install pingpong-rs`.
-- **No changes to `ci.yml`.** Its cross-platform build matrix is CI validation, a
-  separate concern. Left untouched.
+- **No restructuring of `ci.yml`.** Its cross-platform build matrix is CI
+  validation, a separate concern, and stays as-is. The one unavoidable touch: the
+  `pingpong` binary rename means its `binary-name` values change from `pingpong-rs`
+  to `pingpong` (otherwise its artifact-upload paths break). That is a required
+  consequence of the rename, not new scope.
 - **No re-architecture of the app.** This is release tooling only.
 
 ## Decisions (resolved during brainstorming)
