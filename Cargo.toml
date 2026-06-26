@@ -5,6 +5,10 @@ edition = "2021"
 description = "A Rust-based TUI ping utility for monitoring network connectivity to multiple hosts simultaneously"
 license = "MIT"
 
+[[bin]]
+name = "pingpong"
+path = "src/main.rs"
+
 [dependencies]
 # TUI and terminal handling
 ratatui = "0.29"

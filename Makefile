@@ -17,7 +17,7 @@ help: ## List available targets
 build: ## Build the debug binary
 	$(CARGO) build
 
-release: ## Build the optimized release binary (target/release/pingpong-rs)
+release: ## Build the optimized release binary (target/release/pingpong)
 	$(CARGO) build --release
 
 run: ## Run against $(CONFIG); pass extra flags via ARGS="..."
