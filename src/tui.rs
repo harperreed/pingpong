@@ -304,8 +304,8 @@ impl TuiApp {
         let show_help = self.state.show_help;
 
         // Update animation frame based on ping performance
-        let avg_rtt = calculate_average_rtt(stats);
-        let animation_speed = calculate_animation_speed(avg_rtt);
+        let status = rtt_status(stats);
+        let animation_speed = calculate_animation_speed(status.value());
 
         let now = Instant::now();
         if now.duration_since(self.state.last_frame_time).as_millis() > animation_speed as u128 {
@@ -340,7 +340,7 @@ impl TuiApp {
                     &host_info,
                     animation_frame,
                     animation_time,
-                    avg_rtt,
+                    status,
                     animation_type,
                     bounce_pos,
                     local_time,
@@ -422,7 +422,7 @@ fn render_main(
     host_info: &[(String, String)],
     animation_frame: usize,
     animation_time: f64,
-    avg_rtt: f64,
+    rtt_status: RttStatus,
     animation_type: AnimationType,
     bounce_pos: (f64, f64),
     local_time: DateTime<Local>,
@@ -499,7 +499,7 @@ fn render_main(
         main_chunks[1],
         animation_frame,
         animation_time,
-        avg_rtt,
+        rtt_status,
         animation_type,
         bounce_pos,
     );
@@ -703,12 +703,21 @@ fn render_animation_window(
     area: Rect,
     _frame: usize,
     animation_time: f64,
-    avg_rtt: f64,
+    rtt_status: RttStatus,
     animation_type: AnimationType,
     bounce_pos: (f64, f64),
 ) {
-    // Check for connection failure or 0ms ping (suspicious)
-    let has_connection_failure = avg_rtt <= 0.0 || avg_rtt.is_nan() || avg_rtt.is_infinite();
+    // Three explicit states: a real reading, "no data yet", or a failure.
+    // Keeping failure distinct from no-data preserves the flashing red
+    // "CONNECTION FAILED!" alert during an outage, while a not-yet-started run
+    // shows a calm gray "no data" tile.
+    let has_connection_failure = rtt_status.is_failure();
+    let avg_rtt = rtt_status.value();
+    let rtt_label = match rtt_status {
+        RttStatus::Value(rtt) => format!("{rtt:.1}ms"),
+        RttStatus::Failed => "connection failed".to_string(),
+        RttStatus::NoData => "no data".to_string(),
+    };
 
     let (mut animation_art, title) = match animation_type {
         AnimationType::Plasma => {
@@ -717,12 +726,12 @@ fn render_animation_window(
                 area.width as usize,
                 area.height as usize,
             );
-            (art, format!(" Plasma Field - RTT: {:.1}ms ", avg_rtt))
+            (art, format!(" Plasma Field - RTT: {} ", rtt_label))
         }
         AnimationType::Globe => {
             let art =
                 generate_globe_animation(animation_time, area.width as usize, area.height as usize);
-            (art, format!(" Digital Earth - RTT: {:.1}ms ", avg_rtt))
+            (art, format!(" Digital Earth - RTT: {} ", rtt_label))
         }
         AnimationType::BouncingLogo => {
             let art = generate_bouncing_rtt_animation(
@@ -731,7 +740,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Bouncing RTT - {:.1}ms ", avg_rtt))
+            (art, format!(" Bouncing RTT - {} ", rtt_label))
         }
         AnimationType::Matrix => {
             let art = generate_matrix_animation(
@@ -740,7 +749,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Matrix Code - RTT: {:.1}ms ", avg_rtt))
+            (art, format!(" Matrix Code - RTT: {} ", rtt_label))
         }
         AnimationType::Dna => {
             let art = generate_dna_animation(
@@ -749,7 +758,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" DNA Helix - RTT: {:.1}ms ", avg_rtt))
+            (art, format!(" DNA Helix - RTT: {} ", rtt_label))
         }
         AnimationType::Waveform => {
             let art = generate_waveform_animation(
@@ -758,7 +767,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Network Pulse - RTT: {:.1}ms ", avg_rtt))
+            (art, format!(" Network Pulse - RTT: {} ", rtt_label))
         }
     };
 
@@ -775,14 +784,12 @@ fn render_animation_window(
         }
     }
 
-    let color = if has_connection_failure {
-        Color::Red
-    } else if avg_rtt < 50.0 {
-        Color::Green
-    } else if avg_rtt < 150.0 {
-        Color::Yellow
-    } else {
-        Color::Red
+    let color = match rtt_status {
+        RttStatus::NoData => Color::DarkGray,
+        RttStatus::Failed => Color::Red,
+        RttStatus::Value(rtt) if rtt < 50.0 => Color::Green,
+        RttStatus::Value(rtt) if rtt < 150.0 => Color::Yellow,
+        RttStatus::Value(_) => Color::Red,
     };
 
     let final_title = if has_connection_failure {
@@ -799,39 +806,96 @@ fn render_animation_window(
     f.render_widget(paragraph, area);
 }
 
-fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> f64 {
-    if stats.is_empty() {
-        return 100.0; // Default moderate RTT
+/// RTT-derived status for the animation region. This keeps the three cases
+/// explicit instead of overloading an `Option`: 0 ms / NaN / infinite are
+/// failures, an empty reading is "no data yet", and anything else is a value.
+#[derive(Debug, Clone, PartialEq)]
+enum RttStatus {
+    /// No host has an RTT sample yet (pings have not produced a success).
+    NoData,
+    /// A matching RTT was recorded but is not a usable measurement
+    /// (0 ms / non-finite), which indicates a connection failure.
+    Failed,
+    /// A real average RTT in milliseconds.
+    Value(f64),
+}
+
+impl RttStatus {
+    /// Average RTT in ms when there is a real value, else `None`.
+    /// The animation generators only need the number; failure/no-data both
+    /// render as no numeric reading there.
+    fn value(&self) -> Option<f64> {
+        match self {
+            RttStatus::Value(rtt) => Some(*rtt),
+            RttStatus::NoData | RttStatus::Failed => None,
+        }
     }
 
+    /// Whether this reading indicates a connection failure rather than no data.
+    fn is_failure(&self) -> bool {
+        matches!(self, RttStatus::Failed)
+    }
+}
+
+/// Average RTT (ms) across hosts that currently have an RTT sample in their
+/// bounded history, or `None` when no host does.
+///
+/// The sample is taken from `rtt_stats()`, which is computed over the current
+/// history ring buffer — not the lifetime counters. Gating on the lifetime
+/// `successful_pings() > 0` would include hosts whose successes have since been
+/// evicted while timeouts remain, adding a bogus 0 ms and dragging the average
+/// down. `sample_count` ties the inclusion decision to the same data the value
+/// comes from, so behavior is stable over time.
+fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> Option<f64> {
     let mut total_rtt = 0.0;
     let mut count = 0;
 
     for stat in stats.values() {
-        if stat.total_pings() > 0 {
-            total_rtt += stat.rtt_stats().avg.as_secs_f64() * 1000.0;
+        let rtt_stats = stat.rtt_stats();
+        // Only hosts with a success in the current buffer have an RTT sample.
+        // Hosts with no sample report a 0 ms average (`RttStats::default`) and
+        // must be excluded so they do not drag the average toward zero.
+        if rtt_stats.sample_count > 0 {
+            total_rtt += rtt_stats.avg.as_secs_f64() * 1000.0;
             count += 1;
         }
     }
 
     if count > 0 {
-        total_rtt / count as f64
+        Some(total_rtt / count as f64)
     } else {
-        100.0
+        None
     }
 }
 
-fn calculate_animation_speed(avg_rtt: f64) -> u64 {
+/// Number of hosts that have started pinging at all (lifetime counter). Used to
+/// tell a not-yet-started run (NoData) apart from an all-timeout outage (Failed).
+fn hosts_started(stats: &HashMap<String, PingStats>) -> bool {
+    stats.values().any(|s| s.total_pings() > 0)
+}
+
+/// Derive the animation status: a real average, an explicit no-data state
+/// before any pings have completed, or a failure when pings have started but no
+/// usable RTT is available (all hosts timing out/erroring).
+fn rtt_status(stats: &HashMap<String, PingStats>) -> RttStatus {
+    match calculate_average_rtt(stats) {
+        Some(rtt) if rtt > 0.0 && rtt.is_finite() => RttStatus::Value(rtt),
+        Some(_) => RttStatus::Failed,
+        None if hosts_started(stats) => RttStatus::Failed,
+        None => RttStatus::NoData,
+    }
+}
+
+fn calculate_animation_speed(avg_rtt: Option<f64>) -> u64 {
     // Much faster frame rates for smoother animations
     // Fast networks (< 50ms) spin very fast (50ms per frame)
     // Medium networks (50-150ms) spin fast (100ms per frame)
     // Slow networks (> 150ms) spin medium (200ms per frame)
-    if avg_rtt < 50.0 {
-        50 // 20 FPS
-    } else if avg_rtt < 150.0 {
-        100 // 10 FPS
-    } else {
-        200 // 5 FPS
+    // No data yet: use the slow pace rather than pretending the network is moderate.
+    match avg_rtt {
+        Some(rtt) if rtt < 50.0 => 50,   // 20 FPS
+        Some(rtt) if rtt < 150.0 => 100, // 10 FPS
+        _ => 200,                        // 5 FPS
     }
 }
 
@@ -1126,7 +1190,7 @@ fn generate_bouncing_rtt_animation(
     bounce_pos: (f64, f64),
     width: usize,
     height: usize,
-    avg_rtt: f64,
+    avg_rtt: Option<f64>,
 ) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
@@ -1137,8 +1201,12 @@ fn generate_bouncing_rtt_animation(
         result.push(" ".repeat(effective_width));
     }
 
-    // RTT text to bounce
-    let rtt_text = format!("{:.1}ms", avg_rtt);
+    // RTT text to bounce; "--" makes the no-data state explicit instead of a
+    // misleading "0.0ms" readout.
+    let rtt_text = match avg_rtt {
+        Some(rtt) => format!("{rtt:.1}ms"),
+        None => "--".to_string(),
+    };
     let text_width = rtt_text.len();
     let text_height = 1;
 
@@ -1211,7 +1279,22 @@ fn generate_bouncing_rtt_animation(
     result.join("\n")
 }
 
-fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+/// Column fall-speed multiplier for the matrix animation. No data (`None`) is
+/// treated as the slow tier rather than pretending the network is fast.
+fn matrix_speed_multiplier(avg_rtt: Option<f64>) -> f64 {
+    match avg_rtt {
+        Some(rtt) if rtt < 50.0 => 2.0,
+        Some(rtt) if rtt < 150.0 => 1.5,
+        _ => 1.0,
+    }
+}
+
+fn generate_matrix_animation(
+    time: f64,
+    width: usize,
+    height: usize,
+    avg_rtt: Option<f64>,
+) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1232,13 +1315,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
     // Each column has its own falling stream
     let num_columns = effective_width;
-    let speed_multiplier = if avg_rtt < 50.0 {
-        2.0
-    } else if avg_rtt < 150.0 {
-        1.5
-    } else {
-        1.0
-    };
+    let speed_multiplier = matrix_speed_multiplier(avg_rtt);
 
     for x in 0..num_columns {
         // Stable column seed that doesn't change too rapidly
@@ -1318,8 +1395,8 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
     }
 
     // Add network-related glitch effects for poor connections - less flashy
-    if avg_rtt > 150.0 {
-        let glitch_intensity = ((avg_rtt - 150.0) / 100.0).min(0.3);
+    if let Some(rtt) = avg_rtt.filter(|rtt| *rtt > 150.0) {
+        let glitch_intensity = ((rtt - 150.0) / 100.0).min(0.3);
         let num_glitches =
             (effective_height as f64 * effective_width as f64 * glitch_intensity * 0.02) as usize;
 
@@ -1348,7 +1425,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
     }
 
     // Neo's wake-up message for excellent connections
-    if avg_rtt < 15.0 && ((time * 0.3) as usize % 25) < 4 {
+    if avg_rtt.is_some_and(|rtt| rtt < 15.0) && ((time * 0.3) as usize % 25) < 4 {
         let messages = [
             "Wake up, Neo...",
             "The Matrix has you...",
@@ -1391,7 +1468,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
     result.join("\n")
 }
 
-fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: Option<f64>) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1411,8 +1488,13 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
 
     // Generate rotating double helix
     for y in 0..effective_height {
-        let t = time + y as f64 * 0.3; // Offset each row for helix twist
-        let rotation_speed = if avg_rtt < 50.0 { 2.0 } else { 1.0 }; // Faster rotation for better performance
+        // Offset each row for helix twist.
+        let t = time + y as f64 * 0.3;
+        // No data is not a fast network: use the slow rotation pace.
+        let rotation_speed = match avg_rtt {
+            Some(rtt) if rtt < 50.0 => 2.0,
+            _ => 1.0,
+        };
 
         // Left strand position (sine wave)
         let left_offset = (t * rotation_speed).sin() * helix_width as f64;
@@ -1471,9 +1553,9 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
     }
 
     // Add network quality indicator as DNA mutations/stability
-    if avg_rtt > 100.0 {
+    if let Some(rtt) = avg_rtt.filter(|rtt| *rtt > 100.0) {
         // Show "mutations" for poor network performance
-        let mutation_rate = ((avg_rtt - 100.0) / 100.0).min(0.5);
+        let mutation_rate = ((rtt - 100.0) / 100.0).min(0.5);
         let num_mutations = (effective_height as f64 * mutation_rate) as usize;
 
         for _ in 0..num_mutations {
@@ -1493,14 +1575,14 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
     // Add status information
     if effective_height > 2 {
         let status_y = effective_height - 1;
-        let quality = if avg_rtt < 50.0 {
-            "STABLE"
-        } else if avg_rtt < 150.0 {
-            "DEGRADED"
-        } else {
-            "MUTATING"
+        // No data is its own state, not a fast/"STABLE" network.
+        let (quality, rtt_text) = match avg_rtt {
+            None => ("--", "--".to_string()),
+            Some(rtt) if rtt < 50.0 => ("STABLE", format!("{rtt:.1}ms")),
+            Some(rtt) if rtt < 150.0 => ("DEGRADED", format!("{rtt:.1}ms")),
+            Some(rtt) => ("MUTATING", format!("{rtt:.1}ms")),
         };
-        let status_text = format!("DNA:{} RTT:{:.1}ms", quality, avg_rtt);
+        let status_text = format!("DNA:{} RTT:{}", quality, rtt_text);
 
         if status_y < result.len() && effective_width > status_text.len() {
             let start_x = (effective_width - status_text.len()) / 2;
@@ -1517,7 +1599,12 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
     result.join("\n")
 }
 
-fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+fn generate_waveform_animation(
+    time: f64,
+    width: usize,
+    height: usize,
+    avg_rtt: Option<f64>,
+) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1532,13 +1619,12 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
 
     // Generate oscilloscope-style waveforms
     for x in 0..effective_width {
-        // Primary network pulse wave - frequency based on RTT performance
-        let frequency = if avg_rtt < 50.0 {
-            0.3
-        } else if avg_rtt < 150.0 {
-            0.2
-        } else {
-            0.1
+        // Primary network pulse wave - frequency based on RTT performance.
+        // No data uses the slow tier rather than pretending to be fast.
+        let frequency = match avg_rtt {
+            Some(rtt) if rtt < 50.0 => 0.3,
+            Some(rtt) if rtt < 150.0 => 0.2,
+            _ => 0.1,
         };
         let wave_phase = time * 2.0 + x as f64 * frequency;
         let primary_wave = (wave_phase.sin() * amplitude as f64) as isize;
@@ -1612,14 +1698,17 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
 
     // Add signal quality and RTT display
     if effective_height > 3 {
-        let signal_strength = if avg_rtt < 50.0 {
-            "STRONG"
-        } else if avg_rtt < 150.0 {
-            "MEDIUM"
-        } else {
-            "WEAK"
+        // No data is not a "STRONG" signal: label it explicitly.
+        let (signal_strength, rtt_text) = match avg_rtt {
+            None => ("--", "--".to_string()),
+            Some(rtt) if rtt < 50.0 => ("STRONG", format!("{rtt:.1}ms")),
+            Some(rtt) if rtt < 150.0 => ("MEDIUM", format!("{rtt:.1}ms")),
+            Some(rtt) => ("WEAK", format!("{rtt:.1}ms")),
         };
-        let freq_display = format!("{}Hz", (1000.0 / avg_rtt.max(1.0)) as usize);
+        let freq_display = match avg_rtt {
+            Some(rtt) => format!("{}Hz", (1000.0 / rtt.max(1.0)) as usize),
+            None => "--Hz".to_string(),
+        };
 
         // Top status line
         let top_status = format!(
@@ -1639,7 +1728,7 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
         }
 
         // Bottom status line
-        let bottom_status = format!("RTT:{:.1}ms {}", avg_rtt, freq_display);
+        let bottom_status = format!("RTT:{} {}", rtt_text, freq_display);
         let status_y = effective_height - 1;
         if status_y < result.len() && effective_width > bottom_status.len() {
             let start_x = (effective_width - bottom_status.len()) / 2;
@@ -1859,6 +1948,240 @@ fn render_status_bar(
 impl Drop for TuiApp {
     fn drop(&mut self) {
         terminal_leave();
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+
+    #[test]
+    fn average_rtt_is_none_without_data() {
+        // No hosts at all: no-data, not a magic 100 ms average.
+        let empty: HashMap<String, PingStats> = HashMap::new();
+        assert_eq!(calculate_average_rtt(&empty), None);
+
+        // Hosts present but none have recorded any pings: still no-data.
+        let mut no_pings: HashMap<String, PingStats> = HashMap::new();
+        no_pings.insert("host".to_string(), PingStats::new(10));
+        assert_eq!(calculate_average_rtt(&no_pings), None);
+    }
+
+    #[test]
+    fn average_rtt_averages_only_hosts_with_data() {
+        use crate::stats::PingResult;
+
+        let mut stats: HashMap<String, PingStats> = HashMap::new();
+        let mut with_data = PingStats::new(10);
+        with_data.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(20),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        stats.insert("with_data".to_string(), with_data);
+        stats.insert("no_data".to_string(), PingStats::new(10));
+
+        assert_eq!(calculate_average_rtt(&stats), Some(20.0));
+    }
+
+    #[test]
+    fn average_rtt_excludes_timeout_only_hosts() {
+        use crate::stats::PingResult;
+
+        // One healthy host at 100 ms plus three hosts that have only timed out.
+        // Timeout-only hosts have no RTT sample (0 ms avg) and must not drag
+        // the average down toward 0.
+        let mut stats: HashMap<String, PingStats> = HashMap::new();
+
+        let mut healthy = PingStats::new(10);
+        healthy.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(100),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        stats.insert("healthy".to_string(), healthy);
+
+        for i in 0..3 {
+            let mut down = PingStats::new(10);
+            down.add_result(&PingResult::Timeout {
+                sequence: 1,
+                timestamp: Instant::now(),
+            });
+            stats.insert(format!("down-{i}"), down);
+        }
+
+        assert_eq!(calculate_average_rtt(&stats), Some(100.0));
+
+        // When every host is timeout-only there is no RTT data at all.
+        let mut all_down: HashMap<String, PingStats> = HashMap::new();
+        let mut down = PingStats::new(10);
+        down.add_result(&PingResult::Timeout {
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        all_down.insert("down".to_string(), down);
+        assert_eq!(calculate_average_rtt(&all_down), None);
+    }
+
+    #[test]
+    fn average_rtt_ignores_hosts_whose_successes_were_evicted() {
+        use crate::stats::PingResult;
+
+        // A host had successes but they have since been evicted from the small
+        // history buffer, leaving only timeouts. The lifetime counter still says
+        // it succeeded, but it has no current RTT sample, so it must not
+        // contribute a bogus 0 ms to the average.
+        let mut stats: HashMap<String, PingStats> = HashMap::new();
+
+        let mut healthy = PingStats::new(10);
+        healthy.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(100),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        stats.insert("healthy".to_string(), healthy);
+
+        let mut evicted = PingStats::new(2);
+        evicted.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(5),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        evicted.add_result(&PingResult::Timeout {
+            sequence: 2,
+            timestamp: Instant::now(),
+        });
+        evicted.add_result(&PingResult::Timeout {
+            sequence: 3,
+            timestamp: Instant::now(),
+        });
+        stats.insert("evicted".to_string(), evicted);
+
+        // Only the healthy host's 100 ms is real; the down host must not drag
+        // the average down toward 0 (which was the pre-fix behavior: Some(50)).
+        assert_eq!(calculate_average_rtt(&stats), Some(100.0));
+
+        // If every host's successes are evicted there is no RTT data.
+        let mut all_evicted: HashMap<String, PingStats> = HashMap::new();
+        let mut down = PingStats::new(1);
+        down.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(5),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        down.add_result(&PingResult::Timeout {
+            sequence: 2,
+            timestamp: Instant::now(),
+        });
+        all_evicted.insert("down".to_string(), down);
+        assert_eq!(calculate_average_rtt(&all_evicted), None);
+    }
+
+    #[test]
+    fn rtt_status_distinguishes_no_data_from_failure() {
+        use crate::stats::PingResult;
+
+        // No hosts / no pings yet: explicit no-data, not a failure.
+        assert_eq!(rtt_status(&HashMap::new()), RttStatus::NoData);
+        let mut idle: HashMap<String, PingStats> = HashMap::new();
+        idle.insert("host".to_string(), PingStats::new(10));
+        assert_eq!(rtt_status(&idle), RttStatus::NoData);
+
+        // Pings have started but every host is timing out: failure, so the
+        // flashing red "CONNECTION FAILED!" indicator still fires during an
+        // outage (including before the history buffer fills).
+        let mut all_down: HashMap<String, PingStats> = HashMap::new();
+        let mut down = PingStats::new(300);
+        down.add_result(&PingResult::Timeout {
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        all_down.insert("down".to_string(), down);
+        assert_eq!(rtt_status(&all_down), RttStatus::Failed);
+
+        // A real reading is a value.
+        let mut up: HashMap<String, PingStats> = HashMap::new();
+        let mut ok = PingStats::new(10);
+        ok.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(30),
+            sequence: 1,
+            timestamp: Instant::now(),
+        });
+        up.insert("up".to_string(), ok);
+        assert_eq!(rtt_status(&up), RttStatus::Value(30.0));
+    }
+
+    #[test]
+    fn rtt_status_failed_flag_and_value() {
+        assert!(!RttStatus::NoData.is_failure());
+        assert_eq!(RttStatus::NoData.value(), None);
+        assert!(RttStatus::Failed.is_failure());
+        assert_eq!(RttStatus::Failed.value(), None);
+        assert!(!RttStatus::Value(42.0).is_failure());
+        assert_eq!(RttStatus::Value(42.0).value(), Some(42.0));
+    }
+
+    #[test]
+    fn animation_speed_has_explicit_no_data_pace() {
+        assert_eq!(calculate_animation_speed(None), 200);
+        assert_eq!(calculate_animation_speed(Some(10.0)), 50);
+        assert_eq!(calculate_animation_speed(Some(100.0)), 100);
+        assert_eq!(calculate_animation_speed(Some(1000.0)), 200);
+    }
+
+    #[test]
+    fn bouncing_rtt_animation_shows_no_data_marker() {
+        let no_data = generate_bouncing_rtt_animation((5.0, 3.0), 40, 12, None);
+        assert!(no_data.contains("--"), "expected no-data marker: {no_data}");
+        assert!(
+            !no_data.contains("0.0ms"),
+            "must not render 0.0ms: {no_data}"
+        );
+
+        let with_data = generate_bouncing_rtt_animation((5.0, 3.0), 40, 12, Some(12.3));
+        assert!(with_data.contains("12.3ms"));
+    }
+
+    #[test]
+    fn dna_animation_marks_no_data_and_avoids_fast_branches() {
+        let no_data = generate_dna_animation(0.0, 40, 12, None);
+        assert!(no_data.contains("DNA:-- RTT:--"), "got: {no_data}");
+        assert!(
+            !no_data.contains("STABLE"),
+            "no STABLE for no data: {no_data}"
+        );
+        assert!(
+            !no_data.contains("0.0ms"),
+            "must not render 0.0ms: {no_data}"
+        );
+    }
+
+    #[test]
+    fn waveform_animation_marks_no_data_and_avoids_fast_branches() {
+        let no_data = generate_waveform_animation(0.0, 60, 12, None);
+        assert!(no_data.contains("RTT:--"), "got: {no_data}");
+        assert!(
+            !no_data.contains("STRONG"),
+            "no STRONG for no data: {no_data}"
+        );
+        assert!(
+            !no_data.contains("0.0ms"),
+            "must not render 0.0ms: {no_data}"
+        );
+    }
+
+    #[test]
+    fn matrix_animation_treats_no_data_as_slow_pace() {
+        // No data must not be treated as a fast network: same slow tier as a
+        // very slow but present RTT.
+        assert_eq!(matrix_speed_multiplier(None), 1.0);
+        assert_eq!(matrix_speed_multiplier(Some(1000.0)), 1.0);
+        assert_eq!(matrix_speed_multiplier(Some(10.0)), 2.0);
+
+        // A no-data frame still renders without panicking or emitting fast-tier
+        // motion; the classification helpers above prove the tier is slow.
+        let no_data = generate_matrix_animation(3.0, 40, 16, None);
+        assert!(!no_data.is_empty());
     }
 }
 
