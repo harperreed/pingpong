@@ -161,6 +161,7 @@ impl PingStats {
             avg,
             median,
             jitter,
+            sample_count: rtts.len(),
         }
     }
 
@@ -238,6 +239,10 @@ pub struct RttStats {
     pub median: Duration,
     #[allow(dead_code)]
     pub jitter: Duration,
+    /// Number of successes found in the current (bounded) history buffer. Zero
+    /// means `avg` is the `Default` 0 ms and not a real measurement, so callers
+    /// must not treat it as an RTT sample.
+    pub sample_count: usize,
 }
 
 // Quality classification; variants are available for external callers and tests.
@@ -413,6 +418,25 @@ mod stats_tests {
             poor.add_result(&timeout());
         }
         assert_eq!(poor.connection_quality(), ConnectionQuality::Poor);
+    }
+
+    #[test]
+    fn rtt_sample_count_tracks_current_buffer_not_lifetime() {
+        let mut s = PingStats::new(2);
+        // Two successes fill the buffer.
+        s.add_result(&success(10));
+        s.add_result(&success(20));
+        assert_eq!(s.rtt_stats().sample_count, 2);
+        // Lifetime counter still remembers the successes…
+        assert_eq!(s.successful_pings(), 2);
+        // …but after the successes are evicted by timeouts the current buffer
+        // has no RTT sample, so `avg` is the Default 0 ms and must not be
+        // mistaken for a real measurement.
+        s.add_result(&timeout());
+        s.add_result(&timeout());
+        assert_eq!(s.successful_pings(), 2);
+        assert_eq!(s.rtt_stats().sample_count, 0);
+        assert_eq!(s.rtt_stats().avg, Duration::ZERO);
     }
 
     #[test]
