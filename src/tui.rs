@@ -422,7 +422,7 @@ fn render_main(
     host_info: &[(String, String)],
     animation_frame: usize,
     animation_time: f64,
-    avg_rtt: f64,
+    avg_rtt: Option<f64>,
     animation_type: AnimationType,
     bounce_pos: (f64, f64),
     local_time: DateTime<Local>,
@@ -703,12 +703,17 @@ fn render_animation_window(
     area: Rect,
     _frame: usize,
     animation_time: f64,
-    avg_rtt: f64,
+    avg_rtt: Option<f64>,
     animation_type: AnimationType,
     bounce_pos: (f64, f64),
 ) {
-    // Check for connection failure or 0ms ping (suspicious)
-    let has_connection_failure = avg_rtt <= 0.0 || avg_rtt.is_nan() || avg_rtt.is_infinite();
+    // Check for connection failure or 0ms ping (suspicious).
+    // `None` means no measurement yet (startup, no hosts, or no pings landed): that
+    // is a neutral no-data state, not a failure.
+    let has_connection_failure = match avg_rtt {
+        None => false,
+        Some(rtt) => rtt <= 0.0 || rtt.is_nan() || rtt.is_infinite(),
+    };
 
     let (mut animation_art, title) = match animation_type {
         AnimationType::Plasma => {
@@ -717,12 +722,12 @@ fn render_animation_window(
                 area.width as usize,
                 area.height as usize,
             );
-            (art, format!(" Plasma Field - RTT: {:.1}ms ", avg_rtt))
+            (art, measured_title(" Plasma Field - ", avg_rtt))
         }
         AnimationType::Globe => {
             let art =
                 generate_globe_animation(animation_time, area.width as usize, area.height as usize);
-            (art, format!(" Digital Earth - RTT: {:.1}ms ", avg_rtt))
+            (art, measured_title(" Digital Earth - ", avg_rtt))
         }
         AnimationType::BouncingLogo => {
             let art = generate_bouncing_rtt_animation(
@@ -731,7 +736,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Bouncing RTT - {:.1}ms ", avg_rtt))
+            (art, measured_title(" Bouncing ", avg_rtt))
         }
         AnimationType::Matrix => {
             let art = generate_matrix_animation(
@@ -740,7 +745,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Matrix Code - RTT: {:.1}ms ", avg_rtt))
+            (art, measured_title(" Matrix Code - ", avg_rtt))
         }
         AnimationType::Dna => {
             let art = generate_dna_animation(
@@ -749,7 +754,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" DNA Helix - RTT: {:.1}ms ", avg_rtt))
+            (art, measured_title(" DNA Helix - ", avg_rtt))
         }
         AnimationType::Waveform => {
             let art = generate_waveform_animation(
@@ -758,7 +763,7 @@ fn render_animation_window(
                 area.height as usize,
                 avg_rtt,
             );
-            (art, format!(" Network Pulse - RTT: {:.1}ms ", avg_rtt))
+            (art, measured_title(" Network Pulse - ", avg_rtt))
         }
     };
 
@@ -775,20 +780,18 @@ fn render_animation_window(
         }
     }
 
-    let color = if has_connection_failure {
-        Color::Red
-    } else if avg_rtt < 50.0 {
-        Color::Green
-    } else if avg_rtt < 150.0 {
-        Color::Yellow
+    let (color, final_title) = if has_connection_failure {
+        (Color::Red, " CONNECTION FAILED! ".to_string())
+    } else if avg_rtt.is_none() {
+        // Neutral no-data presentation: no measurement yet, so don't imply health
+        // or failure. Muted color distinguishes it from a real low-latency green.
+        (Color::DarkGray, " Waiting for data... ".to_string())
+    } else if avg_rtt.is_some_and(|rtt| rtt < 50.0) {
+        (Color::Green, title)
+    } else if avg_rtt.is_some_and(|rtt| rtt < 150.0) {
+        (Color::Yellow, title)
     } else {
-        Color::Red
-    };
-
-    let final_title = if has_connection_failure {
-        " CONNECTION FAILED! ".to_string()
-    } else {
-        title
+        (Color::Red, title)
     };
 
     let paragraph = Paragraph::new(animation_art)
@@ -799,11 +802,23 @@ fn render_animation_window(
     f.render_widget(paragraph, area);
 }
 
-fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> f64 {
-    if stats.is_empty() {
-        return 100.0; // Default moderate RTT
+/// Animation title showing the measured RTT.
+///
+/// No-data (`None`) yields an empty string; the caller supplies the neutral
+/// "Waiting for data..." title instead of fabricating a latency.
+fn measured_title(prefix: &str, avg_rtt: Option<f64>) -> String {
+    match avg_rtt {
+        Some(rtt) => format!("{prefix}RTT: {rtt:.1}ms "),
+        None => String::new(),
     }
+}
 
+/// Mean RTT (ms) across hosts that have recorded at least one ping.
+///
+/// `None` is an explicit no-data signal: there are no hosts, or no host has any
+/// recorded pings yet. Callers must decide what a missing measurement means
+/// instead of pattern-matching against a magic sentinel RTT.
+fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> Option<f64> {
     let mut total_rtt = 0.0;
     let mut count = 0;
 
@@ -815,23 +830,23 @@ fn calculate_average_rtt(stats: &HashMap<String, PingStats>) -> f64 {
     }
 
     if count > 0 {
-        total_rtt / count as f64
+        Some(total_rtt / count as f64)
     } else {
-        100.0
+        None
     }
 }
 
-fn calculate_animation_speed(avg_rtt: f64) -> u64 {
+fn calculate_animation_speed(avg_rtt: Option<f64>) -> u64 {
     // Much faster frame rates for smoother animations
     // Fast networks (< 50ms) spin very fast (50ms per frame)
     // Medium networks (50-150ms) spin fast (100ms per frame)
     // Slow networks (> 150ms) spin medium (200ms per frame)
-    if avg_rtt < 50.0 {
-        50 // 20 FPS
-    } else if avg_rtt < 150.0 {
-        100 // 10 FPS
-    } else {
-        200 // 5 FPS
+    // No data at all (no hosts / no pings yet) picks its own moderate pacing.
+    match avg_rtt {
+        None => 100,                     // no data: 10 FPS, distinct from any real RTT
+        Some(rtt) if rtt < 50.0 => 50,   // 20 FPS
+        Some(rtt) if rtt < 150.0 => 100, // 10 FPS
+        Some(_) => 200,                  // 5 FPS
     }
 }
 
@@ -1126,7 +1141,7 @@ fn generate_bouncing_rtt_animation(
     bounce_pos: (f64, f64),
     width: usize,
     height: usize,
-    avg_rtt: f64,
+    avg_rtt: Option<f64>,
 ) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
@@ -1137,8 +1152,11 @@ fn generate_bouncing_rtt_animation(
         result.push(" ".repeat(effective_width));
     }
 
-    // RTT text to bounce
-    let rtt_text = format!("{:.1}ms", avg_rtt);
+    // RTT text to bounce; no-data shows no fabricated latency.
+    let rtt_text = match avg_rtt {
+        Some(rtt) => format!("{rtt:.1}ms"),
+        None => String::new(),
+    };
     let text_width = rtt_text.len();
     let text_height = 1;
 
@@ -1187,8 +1205,10 @@ fn generate_bouncing_rtt_animation(
         }
     }
 
-    // Add trail effect - show previous positions with dots
-    if effective_height > 2 && x_pos > 2 && y_pos > 0 {
+    // Add trail effect - show previous positions with dots. Only a real RTT
+    // glyph can trail; in the no-data case there is nothing to trail, so the
+    // trail would otherwise leave stray dots at the stale bounce position.
+    if avg_rtt.is_some() && effective_height > 2 && x_pos > 2 && y_pos > 0 {
         // Add a subtle trail behind the bouncing text
         for trail_offset in 1..=3 {
             let trail_x = x_pos.saturating_sub(trail_offset);
@@ -1211,7 +1231,12 @@ fn generate_bouncing_rtt_animation(
     result.join("\n")
 }
 
-fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+fn generate_matrix_animation(
+    time: f64,
+    width: usize,
+    height: usize,
+    avg_rtt: Option<f64>,
+) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1232,12 +1257,12 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
 
     // Each column has its own falling stream
     let num_columns = effective_width;
-    let speed_multiplier = if avg_rtt < 50.0 {
-        2.0
-    } else if avg_rtt < 150.0 {
-        1.5
-    } else {
-        1.0
+    let speed_multiplier = match avg_rtt {
+        Some(rtt) if rtt < 50.0 => 2.0,
+        Some(rtt) if rtt < 150.0 => 1.5,
+        // No data has no measured health to speed up or slow down for.
+        None => 1.5,
+        Some(_) => 1.0,
     };
 
     for x in 0..num_columns {
@@ -1318,8 +1343,9 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
     }
 
     // Add network-related glitch effects for poor connections - less flashy
-    if avg_rtt > 150.0 {
-        let glitch_intensity = ((avg_rtt - 150.0) / 100.0).min(0.3);
+    if avg_rtt.is_some_and(|rtt| rtt > 150.0) {
+        let rtt = avg_rtt.unwrap_or(0.0);
+        let glitch_intensity = ((rtt - 150.0) / 100.0).min(0.3);
         let num_glitches =
             (effective_height as f64 * effective_width as f64 * glitch_intensity * 0.02) as usize;
 
@@ -1347,8 +1373,9 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
         }
     }
 
-    // Neo's wake-up message for excellent connections
-    if avg_rtt < 15.0 && ((time * 0.3) as usize % 25) < 4 {
+    // Neo's wake-up message for excellent connections only; no data must not
+    // masquerade as an excellent connection.
+    if avg_rtt.is_some_and(|rtt| rtt < 15.0) && ((time * 0.3) as usize % 25) < 4 {
         let messages = [
             "Wake up, Neo...",
             "The Matrix has you...",
@@ -1391,7 +1418,7 @@ fn generate_matrix_animation(time: f64, width: usize, height: usize, avg_rtt: f6
     result.join("\n")
 }
 
-fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: Option<f64>) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1412,7 +1439,11 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
     // Generate rotating double helix
     for y in 0..effective_height {
         let t = time + y as f64 * 0.3; // Offset each row for helix twist
-        let rotation_speed = if avg_rtt < 50.0 { 2.0 } else { 1.0 }; // Faster rotation for better performance
+        let rotation_speed = if avg_rtt.is_some_and(|rtt| rtt < 50.0) {
+            2.0
+        } else {
+            1.0
+        }; // Faster rotation for better performance
 
         // Left strand position (sine wave)
         let left_offset = (t * rotation_speed).sin() * helix_width as f64;
@@ -1471,9 +1502,10 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
     }
 
     // Add network quality indicator as DNA mutations/stability
-    if avg_rtt > 100.0 {
+    if avg_rtt.is_some_and(|rtt| rtt > 100.0) {
+        let rtt = avg_rtt.unwrap_or(0.0);
         // Show "mutations" for poor network performance
-        let mutation_rate = ((avg_rtt - 100.0) / 100.0).min(0.5);
+        let mutation_rate = ((rtt - 100.0) / 100.0).min(0.5);
         let num_mutations = (effective_height as f64 * mutation_rate) as usize;
 
         for _ in 0..num_mutations {
@@ -1490,34 +1522,41 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
         }
     }
 
-    // Add status information
+    // Add status information. No-data (`None`) emits no quality claim at all.
     if effective_height > 2 {
-        let status_y = effective_height - 1;
-        let quality = if avg_rtt < 50.0 {
-            "STABLE"
-        } else if avg_rtt < 150.0 {
-            "DEGRADED"
-        } else {
-            "MUTATING"
-        };
-        let status_text = format!("DNA:{} RTT:{:.1}ms", quality, avg_rtt);
+        if let Some(rtt) = avg_rtt {
+            let status_y = effective_height - 1;
+            let quality = if rtt < 50.0 {
+                "STABLE"
+            } else if rtt < 150.0 {
+                "DEGRADED"
+            } else {
+                "MUTATING"
+            };
+            let status_text = format!("DNA:{} RTT:{:.1}ms", quality, rtt);
 
-        if status_y < result.len() && effective_width > status_text.len() {
-            let start_x = (effective_width - status_text.len()) / 2;
-            let mut chars: Vec<char> = result[status_y].chars().collect();
-            for (i, c) in status_text.chars().enumerate() {
-                if start_x + i < chars.len() {
-                    chars[start_x + i] = c;
+            if status_y < result.len() && effective_width > status_text.len() {
+                let start_x = (effective_width - status_text.len()) / 2;
+                let mut chars: Vec<char> = result[status_y].chars().collect();
+                for (i, c) in status_text.chars().enumerate() {
+                    if start_x + i < chars.len() {
+                        chars[start_x + i] = c;
+                    }
                 }
+                result[status_y] = chars.into_iter().collect();
             }
-            result[status_y] = chars.into_iter().collect();
         }
     }
 
     result.join("\n")
 }
 
-fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: f64) -> String {
+fn generate_waveform_animation(
+    time: f64,
+    width: usize,
+    height: usize,
+    avg_rtt: Option<f64>,
+) -> String {
     let mut result = Vec::new();
     let effective_width = if width > 4 { width - 4 } else { 20 };
     let effective_height = if height > 6 { height - 6 } else { 12 };
@@ -1533,12 +1572,12 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
     // Generate oscilloscope-style waveforms
     for x in 0..effective_width {
         // Primary network pulse wave - frequency based on RTT performance
-        let frequency = if avg_rtt < 50.0 {
-            0.3
-        } else if avg_rtt < 150.0 {
-            0.2
-        } else {
-            0.1
+        let frequency = match avg_rtt {
+            Some(rtt) if rtt < 50.0 => 0.3,
+            Some(rtt) if rtt < 150.0 => 0.2,
+            Some(_) => 0.1,
+            // No data: a plain, neutral waveform.
+            None => 0.2,
         };
         let wave_phase = time * 2.0 + x as f64 * frequency;
         let primary_wave = (wave_phase.sin() * amplitude as f64) as isize;
@@ -1610,46 +1649,49 @@ fn generate_waveform_animation(time: f64, width: usize, height: usize, avg_rtt: 
         result[center_y] = chars.into_iter().collect();
     }
 
-    // Add signal quality and RTT display
+    // Add signal quality and RTT display. No-data (`None`) emits no signal or
+    // latency claim at all.
     if effective_height > 3 {
-        let signal_strength = if avg_rtt < 50.0 {
-            "STRONG"
-        } else if avg_rtt < 150.0 {
-            "MEDIUM"
-        } else {
-            "WEAK"
-        };
-        let freq_display = format!("{}Hz", (1000.0 / avg_rtt.max(1.0)) as usize);
+        if let Some(rtt) = avg_rtt {
+            let signal_strength = if rtt < 50.0 {
+                "STRONG"
+            } else if rtt < 150.0 {
+                "MEDIUM"
+            } else {
+                "WEAK"
+            };
+            let freq_display = format!("{}Hz", (1000.0 / rtt.max(1.0)) as usize);
 
-        // Top status line
-        let top_status = format!(
-            "SIG:{} {}kHz",
-            signal_strength,
-            ((time * 10.0) as usize % 100)
-        );
-        if effective_width > top_status.len() {
-            let start_x = (effective_width - top_status.len()) / 2;
-            let mut chars: Vec<char> = result[0].chars().collect();
-            for (i, c) in top_status.chars().enumerate() {
-                if start_x + i < chars.len() {
-                    chars[start_x + i] = c;
+            // Top status line
+            let top_status = format!(
+                "SIG:{} {}kHz",
+                signal_strength,
+                ((time * 10.0) as usize % 100)
+            );
+            if effective_width > top_status.len() {
+                let start_x = (effective_width - top_status.len()) / 2;
+                let mut chars: Vec<char> = result[0].chars().collect();
+                for (i, c) in top_status.chars().enumerate() {
+                    if start_x + i < chars.len() {
+                        chars[start_x + i] = c;
+                    }
                 }
+                result[0] = chars.into_iter().collect();
             }
-            result[0] = chars.into_iter().collect();
-        }
 
-        // Bottom status line
-        let bottom_status = format!("RTT:{:.1}ms {}", avg_rtt, freq_display);
-        let status_y = effective_height - 1;
-        if status_y < result.len() && effective_width > bottom_status.len() {
-            let start_x = (effective_width - bottom_status.len()) / 2;
-            let mut chars: Vec<char> = result[status_y].chars().collect();
-            for (i, c) in bottom_status.chars().enumerate() {
-                if start_x + i < chars.len() {
-                    chars[start_x + i] = c;
+            // Bottom status line
+            let bottom_status = format!("RTT:{:.1}ms {}", rtt, freq_display);
+            let status_y = effective_height - 1;
+            if status_y < result.len() && effective_width > bottom_status.len() {
+                let start_x = (effective_width - bottom_status.len()) / 2;
+                let mut chars: Vec<char> = result[status_y].chars().collect();
+                for (i, c) in bottom_status.chars().enumerate() {
+                    if start_x + i < chars.len() {
+                        chars[start_x + i] = c;
+                    }
                 }
+                result[status_y] = chars.into_iter().collect();
             }
-            result[status_y] = chars.into_iter().collect();
         }
     }
 
@@ -1872,5 +1914,184 @@ mod theme_tests {
         assert_eq!(Theme::cycle_name("auto"), "dark");
         // unknown/empty names fall back to "dark" (the _ arm)
         assert_eq!(Theme::cycle_name(""), "dark");
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::*;
+    use crate::stats::PingResult;
+    use std::time::{Duration, Instant};
+
+    fn stats_with_pings(ms: u64) -> PingStats {
+        let mut s = PingStats::new(100);
+        s.add_result(&PingResult::Success {
+            rtt: Duration::from_millis(ms),
+            sequence: 0,
+            timestamp: Instant::now(),
+        });
+        s
+    }
+
+    /// A no-data frame must not contain an invisible fragment of the bouncing
+    /// RTT glyph: the old code drew an empty string but then appended a trail
+    /// dot at the stale bounce position, so "Waiting for data..." could sit
+    /// next to a stray `.` with nothing to trail.
+    #[test]
+    fn no_data_bouncing_has_no_stray_trail_glyphs() {
+        let art = generate_bouncing_rtt_animation((20.0, 3.0), 40, 10, None);
+        for stray in ['.', '·'] {
+            assert!(
+                !art.contains(stray),
+                "no-data bouncing art must not draw a stray {stray:?}:\n{art}"
+            );
+        }
+        // The frame title uses '.', so only the trail dot is unambiguous here.
+        let frame = render_animation_to_string_with(None, AnimationType::BouncingLogo);
+        assert!(
+            !frame.contains('·'),
+            "no-data bouncing frame must not draw a stray trail dot:\n{frame}"
+        );
+    }
+
+    #[test]
+    fn average_rtt_is_none_without_data() {
+        // No hosts at all is a no-data condition.
+        let empty: HashMap<String, PingStats> = HashMap::new();
+        assert_eq!(calculate_average_rtt(&empty), None);
+
+        // A host that exists but has recorded no pings is also no-data.
+        let mut no_pings: HashMap<String, PingStats> = HashMap::new();
+        no_pings.insert("h".to_string(), PingStats::new(100));
+        assert_eq!(calculate_average_rtt(&no_pings), None);
+    }
+
+    #[test]
+    fn average_rtt_is_some_when_data_present() {
+        let mut stats: HashMap<String, PingStats> = HashMap::new();
+        stats.insert("a".to_string(), stats_with_pings(20));
+        stats.insert("b".to_string(), stats_with_pings(40));
+        match calculate_average_rtt(&stats) {
+            Some(v) => assert!((v - 30.0).abs() < 1e-9, "expected ~30.0, got {v}"),
+            None => panic!("expected Some(30.0)"),
+        }
+    }
+
+    #[test]
+    fn animation_speed_handles_no_data_explicitly() {
+        // No data has its own explicit pacing rather than a real-RTT coincidence.
+        assert_eq!(calculate_animation_speed(None), 100);
+        // Real RTTs still map through the thresholds.
+        assert_eq!(calculate_animation_speed(Some(10.0)), 50);
+        assert_eq!(calculate_animation_speed(Some(100.0)), 100);
+        assert_eq!(calculate_animation_speed(Some(300.0)), 200);
+    }
+
+    /// Renders the animation window into an in-memory backend and returns the
+    /// full frame as a single string (rows joined with '\n').
+    fn render_animation_to_string_with(
+        avg_rtt: Option<f64>,
+        animation_type: AnimationType,
+    ) -> String {
+        use ratatui::backend::TestBackend;
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).expect("test terminal");
+        terminal
+            .draw(|f| {
+                render_animation_window(f, f.area(), 0, 0.0, avg_rtt, animation_type, (0.0, 0.0));
+            })
+            .expect("draw");
+        let buffer = terminal.backend().buffer();
+        let mut out = String::new();
+        for y in 0..buffer.area.height {
+            for x in 0..buffer.area.width {
+                out.push_str(buffer.cell((x, y)).map(|c| c.symbol()).unwrap_or(" "));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    #[test]
+    fn no_data_renders_neutral_title_not_connection_failure() {
+        let frame = render_animation_to_string_with(None, AnimationType::Plasma);
+        assert!(
+            !frame.contains("CONNECTION FAILED"),
+            "no-data must not read as a dead connection:\n{frame}"
+        );
+        assert!(
+            frame.contains("Waiting for data"),
+            "no-data should render its own neutral title:\n{frame}"
+        );
+    }
+
+    #[test]
+    fn zero_rtt_still_reads_as_connection_failure() {
+        let frame = render_animation_to_string_with(Some(0.0), AnimationType::Plasma);
+        assert!(
+            frame.contains("CONNECTION FAILED"),
+            "a genuine zero/nan RTT is still a dead connection:\n{frame}"
+        );
+    }
+
+    #[test]
+    fn real_rtt_renders_its_measured_title() {
+        let frame = render_animation_to_string_with(Some(42.0), AnimationType::Plasma);
+        assert!(
+            frame.contains("RTT: 42.0ms"),
+            "a real RTT keeps its measured title:\n{frame}"
+        );
+        assert!(!frame.contains("Waiting for data"));
+    }
+
+    /// The bouncing animation title must not duplicate the "RTT" token: it
+    /// should read " Bouncing RTT: 42.0ms " exactly once.
+    #[test]
+    fn bouncing_title_does_not_duplicate_rtt() {
+        let frame = render_animation_to_string_with(Some(42.0), AnimationType::BouncingLogo);
+        assert!(
+            frame.contains("Bouncing RTT: 42.0ms"),
+            "bouncing title should include a single RTT label:\n{frame}"
+        );
+        assert!(
+            !frame.contains("RTT - RTT") && !frame.contains("RTT: RTT"),
+            "bouncing title must not duplicate the RTT token:\n{frame}"
+        );
+    }
+
+    /// With no measurement the status-emitting generators must not fabricate
+    /// best-possible network quality ("STABLE", "STRONG", "0.0ms") while the
+    /// title simultaneously says "Waiting for data...".
+    #[test]
+    fn no_data_status_generators_do_not_claim_strong_health() {
+        for animation_type in [
+            AnimationType::Matrix,
+            AnimationType::Dna,
+            AnimationType::Waveform,
+        ] {
+            let frame = render_animation_to_string_with(None, animation_type);
+            for bogus in ["STABLE", "STRONG", "SIG:", "RTT:0.0ms", "Wake up, Neo"] {
+                assert!(
+                    !frame.contains(bogus),
+                    "{animation_type:?} no-data frame must not claim {bogus:?}:\n{frame}"
+                );
+            }
+        }
+    }
+
+    /// A real high-latency measurement still drives the degraded indicators, so
+    /// the no-data suppression above doesn't blunt genuine health reporting.
+    #[test]
+    fn real_rtt_status_generators_still_report_health() {
+        let dna = render_animation_to_string_with(Some(300.0), AnimationType::Dna);
+        assert!(
+            dna.contains("MUTATING"),
+            "high RTT should still mutate:\n{dna}"
+        );
+        let wave = render_animation_to_string_with(Some(300.0), AnimationType::Waveform);
+        assert!(
+            wave.contains("SIG:WEAK"),
+            "high RTT should still read weak:\n{wave}"
+        );
     }
 }
