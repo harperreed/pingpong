@@ -59,6 +59,52 @@ fn safe_step(n: usize) -> usize {
     n.max(1)
 }
 
+/// Badge shown while the UI is paused; `None` while running so no strip is reserved.
+fn pause_indicator(paused: bool) -> Option<&'static str> {
+    paused.then_some("\u{23f8}  PAUSED \u{2014} press Space to resume")
+}
+
+/// Suffix appended to the terminal title while paused (empty when running).
+pub(crate) fn pause_title_suffix(paused: bool) -> &'static str {
+    if paused {
+        " [PAUSED]"
+    } else {
+        ""
+    }
+}
+
+/// Whether the animation clock may advance this frame; paused freezes it.
+fn animation_advances(paused: bool, elapsed_ms: u128, frame_budget_ms: u64) -> bool {
+    !paused && elapsed_ms > frame_budget_ms as u128
+}
+
+/// Deterministic pseudo-random index in `0..modulus`, derived from a frozen seed.
+///
+/// Animations must be a pure function of the (pausable) animation clock so that a
+/// paused view is a truly static snapshot. A per-frame `rand::random` would keep
+/// jumping on every redraw while paused; hashing the clock keeps output varying
+/// while running yet fixed at a frozen clock value.
+fn stable_index(seed: u64, modulus: usize) -> usize {
+    if modulus == 0 {
+        return 0;
+    }
+    // splitmix64 finalizer: cheap, well-mixed bits from a counter-like seed.
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z % modulus as u64) as usize
+}
+
+/// Splits a 1-row strip off the top of `area`, returning (strip, remainder).
+fn split_top_row(area: Rect) -> (Rect, Rect) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(0)])
+        .split(area);
+    (chunks[0], chunks[1])
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AnimationType {
     Plasma,
@@ -165,6 +211,9 @@ pub struct TuiState {
     pub animation_frame: usize,
     pub last_frame_time: Instant,
     pub start_time: Instant,
+    /// Wall-clock time at which the current pause began; `None` while running.
+    /// Used to shift `start_time` forward on resume so animations do not jump.
+    pause_started: Option<Instant>,
     pub animation_type: AnimationType,
     pub bounce_x: f64,
     pub bounce_y: f64,
@@ -198,6 +247,7 @@ impl TuiState {
             animation_frame: 0,
             last_frame_time: now,
             start_time: now,
+            pause_started: None,
             animation_type,
             bounce_x: 20.0, // Starting position
             bounce_y: 8.0,
@@ -216,6 +266,32 @@ impl TuiState {
     pub fn update_clocks(&mut self) {
         self.local_time = Local::now();
         self.chicago_time = Central.from_utc_datetime(&Utc::now().naive_utc());
+    }
+
+    /// Toggles pause at wall-clock time `now`, maintaining the paused offset so
+    /// the animation clock holds while paused and does not jump on resume.
+    pub fn toggle_pause(&mut self, now: Instant) {
+        if self.paused {
+            // Resume: shift start_time forward by the paused duration so the
+            // animation clock continues where it left off.
+            if let Some(started) = self.pause_started.take() {
+                self.start_time += now.saturating_duration_since(started);
+            }
+            self.last_frame_time = now;
+            self.paused = false;
+        } else {
+            self.pause_started = Some(now);
+            self.paused = true;
+        }
+    }
+
+    /// Animation clock value at wall-clock time `now`, in seconds. While paused
+    /// it is frozen at the value reached when the pause began.
+    pub fn animation_time(&self, now: Instant) -> f64 {
+        let reference = self.pause_started.unwrap_or(now);
+        reference
+            .saturating_duration_since(self.start_time)
+            .as_secs_f64()
     }
 
     pub fn cycle_animation(&mut self) {
@@ -290,6 +366,11 @@ impl TuiApp {
         self.state.show_details
     }
 
+    /// Whether the UI is currently paused (Spacebar toggle).
+    pub fn is_paused(&self) -> bool {
+        self.state.paused
+    }
+
     /// Sets the terminal window/tab title.
     pub fn set_title(&self, title: &str) {
         let _ = execute!(io::stdout(), SetTitle(title));
@@ -302,13 +383,20 @@ impl TuiApp {
     ) -> anyhow::Result<()> {
         let host_info = self.host_info.clone();
         let show_help = self.state.show_help;
+        let paused = self.state.paused;
 
         // Update animation frame based on ping performance
         let avg_rtt = calculate_average_rtt(stats);
         let animation_speed = calculate_animation_speed(avg_rtt);
 
         let now = Instant::now();
-        if now.duration_since(self.state.last_frame_time).as_millis() > animation_speed as u128 {
+        // While paused the animation clock is frozen: the frame counter, bounce
+        // position, and clocks all hold so the display is a static snapshot.
+        if animation_advances(
+            paused,
+            now.duration_since(self.state.last_frame_time).as_millis(),
+            animation_speed,
+        ) {
             self.state.animation_frame = self.state.animation_frame.wrapping_add(1);
             self.state.last_frame_time = now;
 
@@ -318,11 +406,14 @@ impl TuiApp {
             }
         }
 
-        // Update clocks every render
-        self.state.update_clocks();
+        // Update clocks every render (paused freezes them with the rest of the display)
+        if !paused {
+            self.state.update_clocks();
+        }
 
         let animation_frame = self.state.animation_frame;
-        let animation_time = self.state.start_time.elapsed().as_secs_f64();
+        // Derived from the pausable clock so every animation freezes together.
+        let animation_time = self.state.animation_time(now);
         let animation_type = self.state.animation_type;
         let bounce_pos = (self.state.bounce_x, self.state.bounce_y);
         let local_time = self.state.local_time;
@@ -347,6 +438,7 @@ impl TuiApp {
                     chicago_time,
                     use_24_hour,
                     show_lore,
+                    paused,
                     opts,
                 );
             }
@@ -367,7 +459,8 @@ impl TuiApp {
                         self.state.show_help = !self.state.show_help;
                     }
                     KeyCode::Char(' ') => {
-                        self.state.paused = !self.state.paused;
+                        let now = Instant::now();
+                        self.state.toggle_pause(now);
                     }
                     KeyCode::Char('v') => {
                         self.state.cycle_animation();
@@ -429,27 +522,36 @@ fn render_main(
     chicago_time: DateTime<chrono_tz::Tz>,
     use_24_hour: bool,
     show_lore: bool,
+    paused: bool,
     opts: &RenderOpts,
 ) {
     let size = f.area();
 
-    // When a connectivity banner is present, reserve a 1-row strip above everything.
-    let (banner_area, body_area) = if opts.banner.is_some() {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Length(1), Constraint::Min(0)])
-            .split(size);
-        (Some(chunks[0]), chunks[1])
+    // Reserve a 1-row strip above everything for the connectivity banner and/or
+    // the pause badge. One strip serves both (banner text wins when both are set).
+    let strip_text = opts
+        .banner
+        .clone()
+        .or_else(|| pause_indicator(paused).map(str::to_string));
+    let (strip_area, body_area) = if strip_text.is_some() {
+        let (strip, body) = split_top_row(size);
+        (Some(strip), body)
     } else {
         (None, size)
     };
 
-    if let (Some(area), Some(text)) = (banner_area, opts.banner.as_ref()) {
-        let p = Paragraph::new(text.clone()).style(
+    // The banner uses the warning color; the pause badge uses the accent color.
+    if let (Some(area), Some(text)) = (strip_area, strip_text) {
+        let style = if opts.banner.is_some() {
             Style::default()
                 .fg(opts.theme.warn)
-                .add_modifier(Modifier::BOLD),
-        );
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(opts.theme.accent)
+                .add_modifier(Modifier::BOLD)
+        };
+        let p = Paragraph::new(text).style(style);
         f.render_widget(p, area);
     }
 
@@ -771,6 +873,7 @@ fn render_animation_window(
                 animation_art,
                 area.width as usize,
                 area.height as usize,
+                animation_time,
             );
         }
     }
@@ -1476,9 +1579,14 @@ fn generate_dna_animation(time: f64, width: usize, height: usize, avg_rtt: f64) 
         let mutation_rate = ((avg_rtt - 100.0) / 100.0).min(0.5);
         let num_mutations = (effective_height as f64 * mutation_rate) as usize;
 
-        for _ in 0..num_mutations {
-            let y = ((time * 3.0) as usize + rand::random::<usize>()) % effective_height.max(1);
-            let x = rand::random::<usize>() % effective_width.max(1);
+        for i in 0..num_mutations {
+            // Derived from the animation clock (not `rand::random`) so a paused
+            // view holds still; `i` separates the markers within one frame.
+            let seed = time.to_bits().wrapping_add(i as u64);
+            let y = ((time * 3.0) as usize)
+                .wrapping_add(stable_index(seed, effective_height.max(1)))
+                % effective_height.max(1);
+            let x = stable_index(seed.wrapping_mul(0x9E37_79B9), effective_width.max(1));
 
             if y < result.len() {
                 let mut chars: Vec<char> = result[y].chars().collect();
@@ -1660,6 +1768,7 @@ fn generate_connection_failure_overlay(
     base_animation: String,
     width: usize,
     height: usize,
+    time: f64,
 ) -> String {
     let mut lines: Vec<String> = base_animation.lines().map(|s| s.to_string()).collect();
     let effective_width = if width > 4 { width - 4 } else { 20 };
@@ -1721,7 +1830,9 @@ fn generate_connection_failure_overlay(
             "NO RESPONSE",
         ];
 
-        let message_index = (rand::random::<usize>()) % failure_messages.len();
+        // Derived from the animation clock (not `rand::random`) so the message
+        // holds still while paused instead of cycling on every redraw.
+        let message_index = stable_index(time.to_bits(), failure_messages.len());
         let failure_text = failure_messages[message_index];
         let bottom_y = effective_height - 2;
 
@@ -1797,7 +1908,7 @@ fn render_help(f: &mut Frame) {
         "🏓 Pingpong Help",
         "",
         "CONTROLS:",
-        "  Space       - Pause/resume pings",
+        "  Space       - Pause/resume the display",
         "  q / Esc     - Quit application",
         "  Ctrl-C      - Quit application",
         "  h / F1      - Toggle this help",
@@ -1872,5 +1983,162 @@ mod theme_tests {
         assert_eq!(Theme::cycle_name("auto"), "dark");
         // unknown/empty names fall back to "dark" (the _ arm)
         assert_eq!(Theme::cycle_name(""), "dark");
+    }
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use super::*;
+
+    #[test]
+    fn indicator_only_while_paused() {
+        assert!(pause_indicator(false).is_none());
+        assert!(pause_indicator(true).unwrap().contains("PAUSED"));
+    }
+
+    #[test]
+    fn title_suffix_only_while_paused() {
+        assert_eq!(pause_title_suffix(false), "");
+        assert_eq!(pause_title_suffix(true), " [PAUSED]");
+    }
+
+    #[test]
+    fn animation_frozen_while_paused() {
+        // Running: advances once the frame budget elapses.
+        assert!(animation_advances(false, 51, 50));
+        assert!(!animation_advances(false, 50, 50));
+        // Paused: never advances, even long past the budget.
+        assert!(!animation_advances(true, 10_000, 50));
+    }
+
+    /// The animation clock must be frozen while paused so animations that read
+    /// `animation_time` (plasma, globe, matrix, dna, waveform) hold still too.
+    #[test]
+    fn animation_time_frozen_while_paused() {
+        let t0 = Instant::now();
+        let mut state = TuiState::with_animation(AnimationType::Plasma);
+        state.start_time = t0;
+        state.last_frame_time = t0;
+
+        // 2s in, pause. The clock holds at 2.0s no matter how long we stay paused.
+        state.toggle_pause(t0 + Duration::from_secs(2));
+        assert!(state.paused);
+        assert!((state.animation_time(t0 + Duration::from_secs(5)) - 2.0).abs() < 1e-9);
+        assert!((state.animation_time(t0 + Duration::from_secs(60)) - 2.0).abs() < 1e-9);
+
+        // Resume 8s of pause later: the clock continues from 2.0s, not 10.0s.
+        state.toggle_pause(t0 + Duration::from_secs(10));
+        assert!(!state.paused);
+        assert!((state.animation_time(t0 + Duration::from_secs(12)) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn animation_time_runs_when_never_paused() {
+        let t0 = Instant::now();
+        let mut state = TuiState::with_animation(AnimationType::Plasma);
+        state.start_time = t0;
+        assert!((state.animation_time(t0 + Duration::from_secs(7)) - 7.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn repeated_pause_cycles_accumulate() {
+        let t0 = Instant::now();
+        let mut state = TuiState::with_animation(AnimationType::Plasma);
+        state.start_time = t0;
+        state.last_frame_time = t0;
+
+        // Pause for 1s starting at t=1s, resume at t=2s.
+        state.toggle_pause(t0 + Duration::from_secs(1));
+        state.toggle_pause(t0 + Duration::from_secs(2));
+        // Pause again for 4s starting at t=3s, resume at t=7s.
+        state.toggle_pause(t0 + Duration::from_secs(3));
+        state.toggle_pause(t0 + Duration::from_secs(7));
+        // Total paused 5s, so at t=10s the animation clock reads 5s.
+        assert!((state.animation_time(t0 + Duration::from_secs(10)) - 5.0).abs() < 1e-9);
+    }
+
+    /// Renders the main view and returns the screen buffer as text.
+    fn render_to_text(paused: bool, banner: Option<String>) -> String {
+        let backend = ratatui::backend::TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let opts = RenderOpts {
+            theme: Theme::dark(),
+            show_details: false,
+            graph_height: 0,
+            banner,
+            host_states: Vec::new(),
+        };
+        terminal
+            .draw(|f| {
+                render_main(
+                    f,
+                    &HashMap::new(),
+                    &[],
+                    0,
+                    0.0,
+                    0.0,
+                    AnimationType::Plasma,
+                    (0.0, 0.0),
+                    Local::now(),
+                    Central.from_utc_datetime(&Utc::now().naive_utc()),
+                    true,
+                    false,
+                    paused,
+                    &opts,
+                );
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let mut out = String::new();
+        for y in 0..buf.area.height {
+            for x in 0..buf.area.width {
+                out.push_str(buf[(x, y)].symbol());
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// While paused the animation clock is frozen, so every animation must be a
+    /// pure function of that clock: rendering twice at the same frozen time must
+    /// produce byte-identical output. The DNA mutation markers and the connection
+    /// failure message previously used `rand::random`, so a paused DNA/failure
+    /// view kept jumping on every redraw.
+    #[test]
+    fn animations_are_static_at_a_frozen_frame() {
+        // DNA with poor RTT draws per-frame mutation markers.
+        let a = generate_dna_animation(12.5, 40, 20, 250.0);
+        let b = generate_dna_animation(12.5, 40, 20, 250.0);
+        assert_eq!(a, b, "DNA output must be identical at a frozen frame");
+
+        // The connection-failure overlay picks a random message per frame.
+        let o1 = generate_connection_failure_overlay(a.clone(), 40, 20, 12.5);
+        let o2 = generate_connection_failure_overlay(a, 40, 20, 12.5);
+        assert_eq!(
+            o1, o2,
+            "failure overlay must be identical at a frozen frame"
+        );
+    }
+
+    /// Freezing must not turn the animations into constants: distinct clock
+    /// values still produce distinct output while running.
+    #[test]
+    fn animations_still_vary_across_frames() {
+        assert_ne!(
+            generate_dna_animation(12.5, 40, 20, 250.0),
+            generate_dna_animation(13.5, 40, 20, 250.0)
+        );
+    }
+
+    #[test]
+    fn paused_shows_indicator_in_ui() {
+        assert!(render_to_text(true, None).contains("PAUSED"));
+        assert!(!render_to_text(false, None).contains("PAUSED"));
+    }
+
+    #[test]
+    fn connectivity_banner_takes_precedence_over_pause_badge() {
+        let text = render_to_text(true, Some("OFFLINE TEST".to_string()));
+        assert!(text.contains("OFFLINE TEST"));
     }
 }

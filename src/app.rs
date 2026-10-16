@@ -15,6 +15,22 @@ use crate::stats::PingStats;
 use crate::status::{self, ConnectivityState, HostState};
 use crate::tui::{AnimationType, TuiApp};
 
+/// Decides whether a host update should be ingested into app state.
+///
+/// While paused, ping samples are dropped so graphs/stats freeze, but DNS
+/// resolution events are one-shot and must always be recorded — otherwise a
+/// resolve completing during a pause would be lost and the host would stay
+/// stuck showing "Resolving" after resume.
+fn should_ingest(paused: bool, update: &HostUpdate) -> bool {
+    if !paused {
+        return true;
+    }
+    matches!(
+        update,
+        HostUpdate::Resolving | HostUpdate::Resolved(_) | HostUpdate::ResolveFailed(_)
+    )
+}
+
 pub struct App {
     config: Config,
     tui: TuiApp,
@@ -118,7 +134,8 @@ impl App {
                     let states: Vec<HostState> = host_states.iter().map(|(_, s)| s.clone()).collect();
                     let conn = status::connectivity(&states, &self.portal);
                     let agg = status::aggregate(&states);
-                    self.tui.set_title(&status::title(&conn, &agg));
+                    let suffix = crate::tui::pause_title_suffix(self.tui.is_paused());
+                    self.tui.set_title(&format!("{}{}", status::title(&conn, &agg), suffix));
                     let banner = match &conn {
                         ConnectivityState::CaptivePortal { url } => {
                             Some(format!("\u{26a0}  Captive portal detected \u{2014} open {url}"))
@@ -150,6 +167,12 @@ impl App {
     }
 
     fn handle_ping_event(&mut self, event: PingEvent) {
+        // Resolution events are one-shot (they fire only at connect/reconnect), so
+        // they are always ingested. While paused we drop only ping samples so the
+        // graphs/stats freeze at the paused snapshot without losing DNS state.
+        if !should_ingest(self.tui.is_paused(), &event.update) {
+            return;
+        }
         match event.update {
             HostUpdate::Resolving => {
                 self.resolved.insert(event.host_id.clone(), false);
@@ -173,5 +196,51 @@ impl App {
                 entry.add_result(&result);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stats::PingResult;
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::time::Instant;
+
+    fn ping_result() -> PingResult {
+        PingResult::Success {
+            rtt: Duration::from_millis(5),
+            sequence: 0,
+            timestamp: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn running_ingests_everything() {
+        assert!(should_ingest(false, &HostUpdate::Pinged(ping_result())));
+        assert!(should_ingest(false, &HostUpdate::Resolving));
+        assert!(should_ingest(
+            false,
+            &HostUpdate::ResolveFailed("dns".into())
+        ));
+        assert!(should_ingest(
+            false,
+            &HostUpdate::Resolved(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        ));
+    }
+
+    #[test]
+    fn paused_drops_only_ping_samples() {
+        // Ping samples are dropped so stats/graphs freeze.
+        assert!(!should_ingest(true, &HostUpdate::Pinged(ping_result())));
+        // Resolution events are one-shot and must survive a pause.
+        assert!(should_ingest(true, &HostUpdate::Resolving));
+        assert!(should_ingest(
+            true,
+            &HostUpdate::ResolveFailed("dns".into())
+        ));
+        assert!(should_ingest(
+            true,
+            &HostUpdate::Resolved(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        ));
     }
 }
